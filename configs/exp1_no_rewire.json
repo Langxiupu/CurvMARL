@@ -1,0 +1,12 @@
+{
+  "env": {
+    "num_sats": 8,
+    "num_steps": 5,
+    "step_seconds": 60,
+    "num_flows": 2,
+    "flow_rate_bps": 100000000
+  },
+  "rewiring": {
+    "mode": "none"
+  }
+}
