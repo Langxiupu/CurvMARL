@@ -6,8 +6,14 @@ minute of the simulation. Every satellite is connected to four neighbours:
 * Up and down: the preceding and following satellites in the same orbital plane.
 * Left and right: the nearest satellites in the adjacent left and right planes.
 
-Each edge includes a ``length`` attribute in meters.  Graphs are saved as pickle
-files that can later be loaded with :func:`networkx.read_gpickle`.
+Each edge includes basic physical layer metrics:
+
+* ``dist_km`` – link length in kilometres.
+* ``tprop_s`` – propagation delay assuming speed of light.
+* ``cap_bps`` – link capacity in bits per second using a simple path loss model.
+
+Graphs are saved as pickle files that can later be loaded with
+:func:`networkx.read_gpickle`.
 
 The input TLE file must group satellites by orbital plane.  Planes are separated
 by blank lines, and each satellite uses three lines: a name followed by the two
@@ -17,12 +23,34 @@ standard TLE lines.
 from __future__ import annotations
 
 import argparse
+import math
 from datetime import datetime, timedelta
 from typing import List
 
 import numpy as np
 import networkx as nx
 from skyfield.api import EarthSatellite, Loader
+
+
+C_LIGHT_M_S = 299_792_458.0
+BANDWIDTH_HZ = 25e6
+
+
+def _edge_attributes(a: np.ndarray, b: np.ndarray) -> dict:
+    """Return edge metric attributes between two ECI positions in km."""
+
+    d_km = float(np.linalg.norm(a - b))
+    dist_m = d_km * 1000.0
+    tprop = dist_m / C_LIGHT_M_S
+    cap = 0.5 * BANDWIDTH_HZ * math.log2(1.0 + 5.85e5 * math.exp(-3.12e-5 * d_km))
+    if cap < 0.0:
+        cap = 0.0
+    return {
+        "length": dist_m,
+        "dist_km": d_km,
+        "tprop_s": tprop,
+        "cap_bps": cap,
+    }
 
 
 def load_planes(tle_path: str) -> List[List[EarthSatellite]]:
@@ -108,13 +136,13 @@ def generate_graphs(
             current_time.second,
         )
 
-        # Determine positions for all satellites in meters.
+        # Determine positions for all satellites in kilometres.
         positions: List[List[np.ndarray]] = []
         for plane in planes:
             plane_positions = []
             for sat in plane:
                 geocentric = sat.at(t)
-                plane_positions.append(geocentric.position.km * 1_000.0)
+                plane_positions.append(geocentric.position.km)
             positions.append(plane_positions)
 
         # Build graph for this time step.
@@ -123,7 +151,13 @@ def generate_graphs(
         for p_index, plane in enumerate(planes):
             for s_index, sat in enumerate(plane):
                 node_id = f"p{p_index}_s{s_index}"
-                G.add_node(node_id, name=sat.name, plane=p_index, index=s_index)
+                G.add_node(
+                    node_id,
+                    name=sat.name,
+                    plane=p_index,
+                    index=s_index,
+                    xyz_km=tuple(float(x) for x in positions[p_index][s_index]),
+                )
 
         # Connect along-track neighbours (up/down) within each plane.
         for p_index, plane in enumerate(planes):
@@ -135,10 +169,10 @@ def generate_graphs(
                 for neighbour in [up, down]:
                     other = f"p{p_index}_s{neighbour}"
                     if not G.has_edge(node, other):
-                        d = np.linalg.norm(
-                            positions[p_index][s_index] - positions[p_index][neighbour]
+                        attrs = _edge_attributes(
+                            positions[p_index][s_index], positions[p_index][neighbour]
                         )
-                        G.add_edge(node, other, length=float(d))
+                        G.add_edge(node, other, **attrs)
 
         # Connect to nearest satellites in adjacent planes.
         for p_index, plane in enumerate(planes):
@@ -147,19 +181,25 @@ def generate_graphs(
             for s_index, _sat in enumerate(plane):
                 node = f"p{p_index}_s{s_index}"
 
-                left_node, left_dist = _nearest_neighbour(
+                left_node, _left_dist = _nearest_neighbour(
                     positions[p_index][s_index], positions[left_index]
                 )
                 left_id = f"p{left_index}_s{left_node}"
                 if not G.has_edge(node, left_id):
-                    G.add_edge(node, left_id, length=float(left_dist))
+                    attrs = _edge_attributes(
+                        positions[p_index][s_index], positions[left_index][left_node]
+                    )
+                    G.add_edge(node, left_id, **attrs)
 
-                right_node, right_dist = _nearest_neighbour(
+                right_node, _right_dist = _nearest_neighbour(
                     positions[p_index][s_index], positions[right_index]
                 )
                 right_id = f"p{right_index}_s{right_node}"
                 if not G.has_edge(node, right_id):
-                    G.add_edge(node, right_id, length=float(right_dist))
+                    attrs = _edge_attributes(
+                        positions[p_index][s_index], positions[right_index][right_node]
+                    )
+                    G.add_edge(node, right_id, **attrs)
 
         graphs.append(G)
 
