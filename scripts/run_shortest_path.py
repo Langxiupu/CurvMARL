@@ -71,17 +71,17 @@ def route_flows(G: nx.DiGraph, flows: List[Flow]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--steps", type=int, default=3)
+    parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--beta", type=float, default=0.5)
     args = parser.parse_args()
 
     cfg = ConstellationConfig(
         altitude_km=550.0,
         inclination_deg=53.0,
-        num_sats=20,
-        step_seconds=1,
+        num_sats=172,
+        step_seconds=60,
         num_steps=args.steps,
-        epoch_iso="2020-01-01T00:00:00",
+        epoch_iso="2025-08-08T04:00:00",
     )
     builder = TopologyBuilder(cfg)
     G0 = builder.build_G_t(0)
