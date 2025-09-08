@@ -18,3 +18,16 @@ python scripts/satellite_topology.py path/to/constellation.tle --start "2025-08-
 
 Graphs are saved as pickle files (`.gpickle`) with names like `topology_0000.gpickle`.
 
+## Shortest-path routing baseline
+
+`scripts/run_shortest_path.py` constructs a small constellation and routes random flows using weighted shortest paths. Link weights follow:
+
+$w_{ij}^t = \overline{\Gamma}_{ij}^t \left( 1 + \beta \frac{L_{ij}^t}{1 - L_{ij}^t} \right)$
+
+The script prints per-step packet loss rate, average latency and system throughput.
+
+Example:
+
+```bash
+python scripts/run_shortest_path.py --steps 3 --beta 0.5
+```
