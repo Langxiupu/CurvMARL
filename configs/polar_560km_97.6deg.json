@@ -1,0 +1,19 @@
+{
+  "env": {
+    "num_sats": 172,
+    "num_steps": 200,
+    "step_seconds": 60,
+    "altitude_km": 560,
+    "inclination_deg": 97.6,
+    "num_flows": 2,
+    "flow_rate_bps": 1600000,
+    "packet_size_bytes": 1500,
+    "queue_cap_pkts": 640,
+    "retransmissions": 3,
+    "w1": 0.5,
+    "w2": 0.5
+  },
+  "rewiring": {
+    "mode": "none"
+  }
+}
