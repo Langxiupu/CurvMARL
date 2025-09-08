@@ -16,7 +16,9 @@ core ideas are:
   and add virtual edges between them.
 
 The resulting graph contains both the original physical edges (``virt_flag``
-set to ``0``) and the new virtual edges (``virt_flag`` set to ``1``).
+set to ``0``) and the new virtual edges (``virt_flag`` set to ``1``).  For
+undirected satellite topologies the virtual edges are inserted in both
+directions to mimic a symmetric shortcut.
 """
 
 from __future__ import annotations
@@ -279,27 +281,35 @@ class CurvRewirer:
             plan = _emd_plan(x, y, Cmat)
             cand_pairs = topk_pairs_from_plan(plan, P, Q, k=self.topk_per_edge)
             for xnode, ynode in cand_pairs:
-                if G_logic.has_edge(xnode, ynode):
+                # ensure the pair is not already connected in either direction
+                if G_logic.has_edge(xnode, ynode) or G_logic.has_edge(ynode, xnode):
                     continue
-                if virtual_degree[xnode] >= self.max_virtual_degree:
+                if (
+                    virtual_degree[xnode] >= self.max_virtual_degree
+                    or virtual_degree[ynode] >= self.max_virtual_degree
+                ):
                     continue
                 d_xy = sp.distance(xnode, ynode)
                 if not math.isfinite(d_xy):
                     continue
                 wv = max(self.alpha * d_xy, 1e-9)
-                tprop = nx.shortest_path_length(G_phys, xnode, ynode, weight="tprop_s")
-                dist = approx_line_or_geo_dist(xnode, ynode, G_phys)
-                G_logic.add_edge(
-                    xnode,
-                    ynode,
-                    virt_flag=1,
-                    cap_bps=0.0,
-                    R_tot_bps=0.0,
-                    p_loss=0.0,
-                    tprop_s=float(tprop),
-                    dist_km=float(dist),
-                    w_virtual=wv,
+                tprop = nx.shortest_path_length(
+                    G_phys, xnode, ynode, weight="tprop_s"
                 )
+                dist = approx_line_or_geo_dist(xnode, ynode, G_phys)
+                attr = {
+                    "virt_flag": 1,
+                    "cap_bps": 0.0,
+                    "R_tot_bps": 0.0,
+                    "p_loss": 0.0,
+                    "tprop_s": float(tprop),
+                    "dist_km": float(dist),
+                    "w_virtual": wv,
+                }
+                # add symmetric virtual edges to mimic undirected connection
+                G_logic.add_edge(xnode, ynode, **attr)
+                G_logic.add_edge(ynode, xnode, **attr)
                 virtual_degree[xnode] += 1
+                virtual_degree[ynode] += 1
 
         return G_logic
