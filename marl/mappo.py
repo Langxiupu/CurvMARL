@@ -1,10 +1,17 @@
 """Minimal MAPPO implementation for CurvMARL.
 
-This module wires together the GAT backbone, policy/value heads and the
-``MultiSatEnv`` environment to realise a CTDE (centralised training,
-decentralised execution) pipeline.  The code follows the training blueprint
-provided in the project documentation and is intentionally lightweight so it
-can serve as a starting point for further experimentation.
+The training pipeline mirrors the three-stage design described in the
+project documentation:
+
+* **Graph preprocessing** – an optional rewiring step injects virtual
+  edges into the physical topology.
+* **Representation learning** – each agent builds an ``L``-hop ego
+  network around itself and runs a GAT to obtain a local embedding.
+* **Routing decision** – embeddings feed actor/critic heads under the
+  CTDE (centralised training, decentralised execution) paradigm.
+
+The code is intentionally lightweight and serves as a starting point for
+further experimentation.
 """
 
 from __future__ import annotations
@@ -145,23 +152,36 @@ class MAPPO:
 
     # ------------------------------------------------------------------
     def _forward(self, G_logic, G_phys) -> Tuple[torch.Tensor, Dict[int, List[int]], Dict[Tuple[int, int], torch.Tensor]]:
+        """Run the actor backbone on each agent's local neighbourhood."""
+
         nodes = list(G_logic.nodes)
-        X = self.ob_builder.node_features(G_logic, nodes)
-        edge_index, edge_attr = self.ob_builder.edge_arrays(G_logic, nodes)
-        emb = self.actor_backbone(X, edge_index, edge_attr)
         idx_map = {n: i for i, n in enumerate(nodes)}
 
+        embeddings: List[torch.Tensor] = []
         act_neighbors: Dict[int, List[int]] = {}
         edge_feats: Dict[Tuple[int, int], torch.Tensor] = {}
+
         for i in nodes:
-            nbrs = list(G_phys.neighbors(i))
+            ego = self.ob_builder.ego_nodes(G_logic, i)
+            X = self.ob_builder.node_features(G_logic, ego)
+            edge_index, edge_attr = self.ob_builder.edge_arrays(G_logic, ego)
+            emb_sub = self.actor_backbone(X, edge_index, edge_attr)
+            center_idx = ego.index(i)
+            embeddings.append(emb_sub[center_idx])
+
+            nbrs = [
+                j
+                for j in G_phys.neighbors(i)
+                if G_phys[i][j].get("cap_bps", 0.0) > 0.0
+            ]
             act_neighbors[i] = nbrs
             for j in nbrs:
                 e = G_phys[i][j]
                 edge_feats[(idx_map[i], idx_map[j])] = torch.tensor(
                     [
                         e.get("cap_bps", 0.0) / 1e9,
-                        e.get("R_tot_bps", 0.0) / max(e.get("cap_bps", 1e-6), 1e-6),
+                        e.get("R_tot_bps", 0.0)
+                        / max(e.get("cap_bps", 1e-6), 1e-6),
                         e.get("p_loss", 0.0),
                         e.get("tprop_s", 0.0) * 1000.0,
                         0.0,
@@ -169,6 +189,8 @@ class MAPPO:
                     ],
                     dtype=torch.float32,
                 )
+
+        emb = torch.stack(embeddings)
         return emb, act_neighbors, edge_feats, idx_map
 
     # ------------------------------------------------------------------
