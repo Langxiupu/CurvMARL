@@ -7,6 +7,7 @@ from .traffic import (
     GroundStation,
     GROUND_STATIONS,
     GroundStationTraffic,
+    GroundStationPoissonTraffic,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "GroundStation",
     "GROUND_STATIONS",
     "GroundStationTraffic",
+    "GroundStationPoissonTraffic",
 ]
