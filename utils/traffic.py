@@ -1,12 +1,128 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Iterable
+from typing import Dict, List, Tuple, Iterable, Optional, Sequence
 
+import random
 import networkx as nx
 
 
-__all__ = ["Flow", "update_loss_and_queue", "aggregate_metrics"]
+__all__ = [
+    "Flow",
+    "update_loss_and_queue",
+    "aggregate_metrics",
+    "GroundStation",
+    "GROUND_STATIONS",
+    "GroundStationTraffic",
+]
+
+
+@dataclass(frozen=True)
+class GroundStation:
+    """Simple ground station description."""
+
+    id: int
+    name: str
+    lat_deg: float
+    lon_deg: float
+
+
+# fmt: off
+GROUND_STATIONS: List[GroundStation] = [
+    GroundStation(0, "GS0", 43.0, 7.0),     # Southern France / Italy border
+    GroundStation(1, "GS1", 45.0, 12.0),    # Northern Italy
+    GroundStation(2, "GS2", 52.0, 4.0),     # UK / Belgium region
+    GroundStation(3, "GS3", -34.0, 151.0),  # Australia (Sydney/Melbourne)
+    GroundStation(4, "GS4", -37.0, 175.0),  # New Zealand North Island
+    GroundStation(5, "GS5", 46.0, -123.0),  # US Pacific Northwest
+    GroundStation(6, "GS6", 20.0, -156.0),  # Hawaii
+    GroundStation(7, "GS7", 34.0, -118.0),  # US Southwest / Los Angeles
+    GroundStation(8, "GS8", 29.0, -98.0),   # Gulf of Mexico region
+    GroundStation(9, "GS9", 28.0, -82.0),   # US Southeast / Florida
+    GroundStation(10, "GS10", 41.0, -88.0), # US Midwest / Great Lakes
+    GroundStation(11, "GS11", 38.0, -77.0), # US East Coast / Virginia
+]
+# fmt: on
+
+
+@dataclass
+class _FlowState:
+    """Internal state for an active ground-station flow."""
+
+    id: int
+    dst: int
+    remaining_bits: float
+
+
+class GroundStationTraffic:
+    """Generate persistent Pareto-sized flows between ground stations.
+
+    Each ground station maintains a single active flow.  When a flow finishes
+    transmitting, a new destination is chosen uniformly from the remaining
+    stations and a new flow size is sampled from a Pareto distribution.
+    """
+
+    def __init__(
+        self,
+        rate_bps: float,
+        pareto_shape: float,
+        pareto_scale_bytes: float,
+        stations: Sequence[GroundStation] = GROUND_STATIONS,
+        seed: Optional[int] = None,
+    ) -> None:
+        self.rate_bps = rate_bps
+        self.pareto_shape = pareto_shape
+        self.pareto_scale_bytes = pareto_scale_bytes
+        self.stations = list(stations)
+        self.rng = random.Random(seed)
+        self._next_id = 0
+        self._active: Dict[int, _FlowState] = {}
+
+    # ------------------------------------------------------------------
+    def _sample_size_bits(self) -> float:
+        scale = self.pareto_scale_bytes * 8.0
+        return scale * self.rng.paretovariate(self.pareto_shape)
+
+    def _pick_dst(self, src_id: int) -> int:
+        choices = [gs.id for gs in self.stations if gs.id != src_id]
+        return self.rng.choice(choices)
+
+    # ------------------------------------------------------------------
+    def reset(self) -> None:
+        """Clear all state, forcing new flow generation on next step."""
+
+        self._active.clear()
+
+    # ------------------------------------------------------------------
+    def step(self, dt_s: float) -> List[Flow]:
+        """Advance time and return current active flows.
+
+        Parameters
+        ----------
+        dt_s: float
+            Duration of the simulated step in seconds.
+        """
+
+        flows: List[Flow] = []
+        bits_per_step = self.rate_bps * dt_s
+        for gs in self.stations:
+            st = self._active.get(gs.id)
+            if st is None:
+                dst = self._pick_dst(gs.id)
+                st = _FlowState(id=self._next_id, dst=dst, remaining_bits=self._sample_size_bits())
+                self._next_id += 1
+                self._active[gs.id] = st
+            else:
+                st.remaining_bits -= bits_per_step
+                if st.remaining_bits <= 0:
+                    dst = self._pick_dst(gs.id)
+                    st.id = self._next_id
+                    st.dst = dst
+                    st.remaining_bits = self._sample_size_bits()
+                    self._next_id += 1
+
+            flows.append(Flow(id=st.id, src=gs.id, dst=st.dst, rate_bps=self.rate_bps, path_edges=[]))
+        return flows
 
 
 @dataclass
