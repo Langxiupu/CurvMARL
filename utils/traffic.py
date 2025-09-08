@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Iterable, Optional, Sequence
 
 import random
+import math
 import networkx as nx
 
 
@@ -14,6 +15,7 @@ __all__ = [
     "GroundStation",
     "GROUND_STATIONS",
     "GroundStationTraffic",
+    "GroundStationPoissonTraffic",
 ]
 
 
@@ -123,6 +125,78 @@ class GroundStationTraffic:
 
             flows.append(Flow(id=st.id, src=gs.id, dst=st.dst, rate_bps=self.rate_bps, path_edges=[]))
         return flows
+
+
+class GroundStationPoissonTraffic:
+    """Generate Poisson arrivals of Pareto-sized flows at ground stations."""
+
+    def __init__(
+        self,
+        rate_bps: float,
+        pareto_shape: float,
+        pareto_scale_bytes: float = 512 * 1024,
+        mean_flows_per_min: float = 5.0,
+        stations: Sequence[GroundStation] = GROUND_STATIONS,
+        seed: Optional[int] = None,
+    ) -> None:
+        self.rate_bps = rate_bps
+        self.pareto_shape = pareto_shape
+        self.pareto_scale_bytes = pareto_scale_bytes
+        self.mean_flows_per_min = mean_flows_per_min
+        self.stations = list(stations)
+        self.rng = random.Random(seed)
+        self._next_id = 0
+        self._active: Dict[int, List[_FlowState]] = {gs.id: [] for gs in self.stations}
+
+    # ------------------------------------------------------------------
+    def _sample_size_bits(self) -> float:
+        scale = self.pareto_scale_bytes * 8.0
+        return scale * self.rng.paretovariate(self.pareto_shape)
+
+    def _pick_dst(self, src_id: int) -> int:
+        choices = [gs.id for gs in self.stations if gs.id != src_id]
+        return self.rng.choice(choices)
+
+    # ------------------------------------------------------------------
+    def reset(self) -> None:
+        for lst in self._active.values():
+            lst.clear()
+        self._next_id = 0
+
+    # ------------------------------------------------------------------
+    def step(self, dt_s: float) -> List[Flow]:
+        flows: List[Flow] = []
+        bits_per_step = self.rate_bps * dt_s
+        lam = self.mean_flows_per_min * (dt_s / 60.0)
+        for gs in self.stations:
+            active_list = self._active[gs.id]
+
+            # Generate new flows for this step
+            num_new = self._poisson(lam)
+            for _ in range(num_new):
+                dst = self._pick_dst(gs.id)
+                st = _FlowState(id=self._next_id, dst=dst, remaining_bits=self._sample_size_bits())
+                self._next_id += 1
+                active_list.append(st)
+
+            # Emit active flows and update remaining sizes
+            for st in active_list[:]:
+                flows.append(Flow(id=st.id, src=gs.id, dst=st.dst, rate_bps=self.rate_bps, path_edges=[]))
+                st.remaining_bits -= bits_per_step
+                if st.remaining_bits <= 0:
+                    active_list.remove(st)
+        return flows
+
+    # ------------------------------------------------------------------
+    def _poisson(self, lam: float) -> int:
+        # Knuth's algorithm
+        L = math.exp(-lam)
+        k = 0
+        p = 1.0
+        while p > L:
+            k += 1
+            p *= self.rng.random()
+        return k - 1
 
 
 @dataclass
