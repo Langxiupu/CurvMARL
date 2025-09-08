@@ -177,38 +177,42 @@ def update_loss_and_queue(
     # Reset per-edge step stats
     for u, v, data in G.edges(data=True):
         data.setdefault("phi_pkts", 0.0)
-        data["R_tot_bps"] = 0.0
+        data["R_tot_bps"] = 0.0  # offered load
+        data["R_eff_bps"] = 0.0  # after upstream losses
 
-    # STEP 1: accumulate arrivals
+    # STEP 1: accumulate offered arrivals (ignoring losses)
     for f in flows:
         r = f.rate_bps
         for (u, v) in f.path_edges:
             G[u][v]["R_tot_bps"] += r
-            f.edge_in_bps[(u, v)] = r
 
     # STEP 2: congestion-based loss probability
     eps = 1e-9
     for u, v, data in G.edges(data=True):
         C = data.get("cap_bps", 0.0)
-        R = data["R_tot_bps"]
-        data["rho"] = R / max(C, eps)
-        data["p_loss"] = max(0.0, 1.0 - C / max(R, eps)) if R > 0 else 0.0
+        R_offered = data["R_tot_bps"]
+        data["rho"] = R_offered / max(C, eps)
+        data["p_loss"] = max(0.0, 1.0 - C / max(R_offered, eps)) if R_offered > 0 else 0.0
 
-    # STEP 3: per-flow edge_out and q_list
+    # STEP 3: propagate per-flow rates hop-by-hop
     for f in flows:
         f.q_list = []
+        r_in = f.rate_bps
         for (u, v) in f.path_edges:
-            p = G[u][v]["p_loss"]
-            r_in = f.edge_in_bps[(u, v)]
+            data = G[u][v]
+            f.edge_in_bps[(u, v)] = r_in
+            p = data["p_loss"]
+            data["R_eff_bps"] += r_in
             r_out = r_in * (1.0 - p)
             f.edge_out_bps[(u, v)] = r_out
             f.q_list.append(1.0 - p)
+            r_in = r_out
 
-    # STEP 4: queue update
+    # STEP 4: queue update using effective arrivals
     S_bits = 8 * S_bytes
     for u, v, data in G.edges(data=True):
         C = data.get("cap_bps", 0.0)
-        R = data["R_tot_bps"]
+        R = data["R_eff_bps"]
         phi = float(data.get("phi_pkts", 0.0))
 
         A_pkts = (R * dt_s) / S_bits
@@ -224,6 +228,7 @@ def update_loss_and_queue(
         data["S_pkts"] = served
         data["D_pkts"] = overflow
         data["phi_pkts"] = phi_next
+        data["rho_eff"] = R / max(C, eps)
 
     # STEP 5: per-flow latency and goodput
     results: List[Dict[str, float]] = []
@@ -234,7 +239,7 @@ def update_loss_and_queue(
             d = G[u][v]
             p = d["p_loss"]
             tau_prop = d.get("tprop_s", 0.0)
-            rho = d.get("rho", 0.0)
+            rho = d.get("rho_eff", 0.0)
             tau_tran = dt_s * min(1.0, rho)
             phi = d.get("phi_pkts", 0.0)
             C = d.get("cap_bps", 0.0)
