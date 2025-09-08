@@ -25,10 +25,12 @@ class EnvConfig:
     bandwidth_mhz: float = 25.0
 
     num_flows: int = 4
-    flow_rate_bps: float = 1e8
-    packet_size_bytes: int = 640
-    queue_cap_pkts: int = 500
-    retransmissions: int = 5
+    flow_rate_bps: float = 1.6e6
+    packet_size_bytes: int = 1500
+    queue_cap_pkts: int = 640
+    retransmissions: int = 3
+    w1: float = 0.5
+    w2: float = 0.5
     max_hops: int = 32
 
 
@@ -150,8 +152,8 @@ class MultiSatEnv:
         overflow = sum(self.G_phys[u][v].get("D_pkts", 0.0) for u, v in self.G_phys.edges)
 
         reward = (
-            1.0 * metrics["system_throughput_bps"] / 1e9
-            - 1.0 * metrics["avg_delivery_time_s"]
+            self.cfg.w1 * metrics["system_throughput_bps"] / 1e9
+            - self.cfg.w2 * metrics["avg_delivery_time_s"]
             - 0.01 * overflow
             - 1.0 * loop_penalty
         )
