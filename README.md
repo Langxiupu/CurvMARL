@@ -31,3 +31,17 @@ Example:
 ```bash
 python scripts/run_shortest_path.py --steps 3 --beta 0.5
 ```
+
+## Algorithm entry points
+
+`scripts/run_graphpr.py` demonstrates the `graph_pr` shortest-path routine on a JSON edge list:
+
+```bash
+python scripts/run_graphpr.py --graph example_graph.json --src A --dst C
+```
+
+`scripts/run_curvmarl.py` launches the MAPPO-based CurvMARL training using a configuration file:
+
+```bash
+python scripts/run_curvmarl.py --config configs/exp1_no_rewire.json
+```
