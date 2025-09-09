@@ -68,8 +68,15 @@ class MultiSatEnv:
     # ------------------------------------------------------------------
     def _graph_to_nx(self, G) -> nx.DiGraph:
         H = nx.DiGraph()
+        # carry over basic node metadata for state construction
         for u in range(G.num_nodes):
-            H.add_node(u)
+            p, s = self.builder._inv(u)
+            pos = G.positions.get(u, (0.0, 0.0, 0.0))
+            H.add_node(u, plane=p, slot=s, pos=pos)
+
+        H.graph["slots_per_plane"] = getattr(self.builder, "S", 1)
+        H.graph["planes"] = getattr(self.builder, "P", 1)
+
         for (u, v) in G.E_physical:
             cap = G.cap[(u, v)]
             tprop = G.tprop[(u, v)]
