@@ -5,7 +5,6 @@ from utils import GroundStationPoissonTraffic
 
 def main() -> None:
     traffic = GroundStationPoissonTraffic(
-        rate_bps=1.6e6,
         pareto_shape=1.5,
         pareto_scale_bytes=640 * 1024,
         mean_flows_per_min=60.0,

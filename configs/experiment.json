@@ -1,0 +1,39 @@
+{
+  "shortest_path": {
+    "constellation": {
+      "altitude_km": 550.0,
+      "inclination_deg": 53.0,
+      "num_sats": 172,
+      "step_seconds": 60,
+      "num_steps": 200,
+      "epoch_iso": "2025-08-08T04:00:00",
+      "bandwidth_mhz": 25.0
+    },
+    "traffic": {
+      "pareto_shape": 1.5,
+      "pareto_scale_bytes": 655360,
+      "mean_flows_per_min": 60.0
+    },
+    "algo": {
+      "beta": 0.5,
+      "steps": 200
+    }
+  },
+  "mappo": {
+    "env": {
+      "num_sats": 172,
+      "num_steps": 200,
+      "step_seconds": 60,
+      "num_flows": 2,
+      "flow_rate_bps": 1600000,
+      "packet_size_bytes": 1500,
+      "queue_cap_pkts": 640,
+      "retransmissions": 3,
+      "w1": 0.5,
+      "w2": 0.5
+    },
+    "rewiring": {
+      "mode": "none"
+    }
+  }
+}

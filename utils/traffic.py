@@ -144,25 +144,31 @@ class GroundStationTraffic:
 
 
 class GroundStationPoissonTraffic:
-    """Generate Poisson arrivals of Pareto-sized flows at ground stations."""
+    """Generate Poisson arrivals of Pareto-sized flows at ground stations.
+
+    Unlike :class:`GroundStationTraffic`, flows produced by this generator do
+    not maintain a persistent transmission rate.  Instead, each step samples a
+    number of new flows for every ground station according to a Poisson
+    process.  Flow sizes are drawn from a Pareto distribution and the entire
+    amount of data is assumed to be transmitted within the current simulation
+    step.  The effective rate for a flow is therefore ``size_bits / dt_s`` where
+    ``dt_s`` is the step duration.
+    """
 
     def __init__(
         self,
-        rate_bps: float,
         pareto_shape: float,
         pareto_scale_bytes: float = 640 * 1024,
         mean_flows_per_min: float = 60.0,
         stations: Sequence[GroundStation] = GROUND_STATIONS,
         seed: Optional[int] = None,
     ) -> None:
-        self.rate_bps = rate_bps
         self.pareto_shape = pareto_shape
         self.pareto_scale_bytes = pareto_scale_bytes
         self.mean_flows_per_min = mean_flows_per_min
         self.stations = list(stations)
         self.rng = random.Random(seed)
         self._next_id = 0
-        self._active: Dict[int, List[_FlowState]] = {gs.id: [] for gs in self.stations}
 
     # ------------------------------------------------------------------
     def average_flow_size_bytes(self) -> float:
@@ -174,9 +180,14 @@ class GroundStationPoissonTraffic:
 
     # ------------------------------------------------------------------
     def average_rate_bps(self) -> float:
-        """Return the configured per-flow transmission rate in bits/s."""
+        """Return the mean offered load in bits/s.
 
-        return self.rate_bps
+        This is derived from the average flow size and the mean arrival rate of
+        flows per minute.
+        """
+
+        avg_size_bits = self.average_flow_size_bytes() * 8.0
+        return avg_size_bits * self.mean_flows_per_min / 60.0
 
     # ------------------------------------------------------------------
     def _sample_size_bits(self) -> float:
@@ -189,33 +200,26 @@ class GroundStationPoissonTraffic:
 
     # ------------------------------------------------------------------
     def reset(self) -> None:
-        for lst in self._active.values():
-            lst.clear()
+        """Reset the internal flow identifier counter."""
+
         self._next_id = 0
 
     # ------------------------------------------------------------------
     def step(self, dt_s: float) -> List[Flow]:
+        """Advance time by ``dt_s`` seconds and return the new flows."""
+
         flows: List[Flow] = []
-        bits_per_step = self.rate_bps * dt_s
         lam = self.mean_flows_per_min * (dt_s / 60.0)
         for gs in self.stations:
-            active_list = self._active[gs.id]
-
-            # Generate new flows for this step
             num_new = self._poisson(lam)
             for _ in range(num_new):
                 dst = self._pick_dst(gs.id)
                 size_bits = self._sample_size_bits()
-                st = _FlowState(id=self._next_id, dst=dst, remaining_bits=size_bits)
+                rate = size_bits / dt_s if dt_s > 0 else 0.0
+                flows.append(
+                    Flow(id=self._next_id, src=gs.id, dst=dst, rate_bps=rate, path_edges=[])
+                )
                 self._next_id += 1
-                active_list.append(st)
-
-            # Emit active flows and update remaining sizes
-            for st in active_list[:]:
-                flows.append(Flow(id=st.id, src=gs.id, dst=st.dst, rate_bps=self.rate_bps, path_edges=[]))
-                st.remaining_bits -= bits_per_step
-                if st.remaining_bits <= 0:
-                    active_list.remove(st)
         return flows
 
     # ------------------------------------------------------------------

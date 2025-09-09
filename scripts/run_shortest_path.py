@@ -9,12 +9,13 @@ serves as a sanity check for the simulation infrastructure.
 """
 
 import argparse
+import json
 import math
 from typing import Dict, List
 
 import networkx as nx
 
-import sys 
+import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -119,36 +120,36 @@ def route_flows(G: nx.DiGraph, flows: List[Flow]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--steps", type=int, default=200)
-    parser.add_argument("--beta", type=float, default=0.5)
+    parser.add_argument("--config", type=str, required=True)
     args = parser.parse_args()
 
-    cfg = ConstellationConfig(
-        altitude_km=550.0,
-        inclination_deg=53.0,
-        num_sats=172,
-        step_seconds=60,
-        num_steps=args.steps,
-        epoch_iso="2025-08-08T04:00:00",
-    )
-    builder = TopologyBuilder(cfg)
-    # Generate random Poisson arrivals of Pareto-sized flows at each ground station.
+    with open(args.config, "r") as f:
+        all_cfg = json.load(f)
+    cfg_root = all_cfg.get("shortest_path", all_cfg)
+
+    const_cfg = ConstellationConfig(**cfg_root["constellation"])
+    builder = TopologyBuilder(const_cfg)
+
+    tcfg = cfg_root["traffic"]
     traffic = GroundStationPoissonTraffic(
-        rate_bps=1.6e6,
-        pareto_shape=1.5,
-        pareto_scale_bytes=640 * 1024,
-        mean_flows_per_min=60.0,
+        pareto_shape=tcfg["pareto_shape"],
+        pareto_scale_bytes=tcfg.get("pareto_scale_bytes", 640 * 1024),
+        mean_flows_per_min=tcfg.get("mean_flows_per_min", 60.0),
     )
 
-    dt_s = float(cfg.step_seconds)
+    algo_cfg = cfg_root.get("algo", {})
+    beta = algo_cfg.get("beta", 0.5)
+    steps = algo_cfg.get("steps", const_cfg.num_steps)
+
+    dt_s = float(const_cfg.step_seconds)
     throughputs: List[float] = []
     plrs: List[float] = []
     hop_counts: List[float] = []
     link_utils: List[float] = []
     flow_delays_ms: Dict[int, float] = {}
-    for step in range(args.steps):
+    for step in range(steps):
         G_t = builder.build_G_t(step)
-        H = graph_to_nx(G_t, cfg.bandwidth_mhz)
+        H = graph_to_nx(G_t, const_cfg.bandwidth_mhz)
         gs_map = associate_ground_stations(G_t.positions)
         gs_flows = traffic.step(dt_s)
         flows: List[Flow] = []
@@ -160,7 +161,7 @@ def main() -> None:
             flows.append(Flow(id=f.id, src=src_sat, dst=dst_sat, rate_bps=f.rate_bps, path_edges=[]))
 
 
-        compute_weights(H, args.beta, dt_s)
+        compute_weights(H, beta, dt_s)
         route_flows(H, flows)
         results = update_loss_and_queue(
             H,
@@ -199,12 +200,12 @@ def main() -> None:
     avg_hops = sum(hop_counts) / len(hop_counts) if hop_counts else 0.0
     avg_link_util = sum(link_utils) / len(link_utils) if link_utils else 0.0
     avg_pkt_delay_ms = sum(flow_delays_ms.values()) / len(flow_delays_ms) if flow_delays_ms else 0.0
-    print(f"Average packet loss rate over {args.steps} steps: {avg_plr:.2f}%")
-    print(f"Average system throughput over {args.steps} steps: {avg_thr:.3f} Mbps")
-    print(f"Average hop count over {args.steps} steps: {avg_hops:.2f}")
-    print(f"Average link utilization over {args.steps} steps: {avg_link_util:.3f}")
+    print(f"Average packet loss rate over {steps} steps: {avg_plr:.2f}%")
+    print(f"Average system throughput over {steps} steps: {avg_thr:.3f} Mbps")
+    print(f"Average hop count over {steps} steps: {avg_hops:.2f}")
+    print(f"Average link utilization over {steps} steps: {avg_link_util:.3f}")
     print(
-        f"Average packet transmission delay over {args.steps} steps: {avg_pkt_delay_ms:.3f} ms",
+        f"Average packet transmission delay over {steps} steps: {avg_pkt_delay_ms:.3f} ms",
     )
 
 
