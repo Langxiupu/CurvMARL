@@ -1,9 +1,9 @@
 {
   "shortest_path": {
     "constellation": {
-      "altitude_km": 550.0,
-      "inclination_deg": 53.0,
-      "num_sats": 172,
+      "altitude_km": 560.0,
+      "inclination_deg": 97.6,
+      "num_sats": 348,
       "step_seconds": 60,
       "num_steps": 200,
       "epoch_iso": "2025-08-08T04:00:00",
@@ -11,8 +11,8 @@
     },
     "traffic": {
       "pareto_shape": 1.5,
-      "pareto_scale_bytes": 52428800,
-      "mean_flows_per_min": 60.0
+      "pareto_scale_bytes": 5242880,
+      "mean_flows_per_min": 100.0
     },
     "algo": {
       "beta": 0.5,
