@@ -132,14 +132,28 @@ def main() -> None:
     with open(args.config, "r") as f:
         all_cfg = json.load(f)
     cfg_root = all_cfg.get("shortest_path", all_cfg)
-
+    # Override the constellation bandwidth to 500 MHz.  Link capacities are
+    # expressed in bits/s (Mbps when reported) so this only affects the
+    # spectral bandwidth term in ``link_capacity_jsac``.
     const_cfg = ConstellationConfig(**cfg_root["constellation"])
+    const_cfg.bandwidth_mhz = 500.0
     builder = TopologyBuilder(const_cfg)
 
+    # Each simulation step represents one minute of traffic.  The Pareto
+    # distribution minimum (scale) may be provided in gigabytes to describe
+    # flow sizes over that minute.  Convert to bytes here because
+    # ``GroundStationPoissonTraffic`` expects sizes in bytes and internally
+    # converts to bits (1 byte = 8 bits) when computing per-second rates.
     tcfg = cfg_root["traffic"]
+    GB_TO_BYTES = 1024 ** 3
+    pareto_scale_gb = tcfg.get("pareto_scale_gb")
+    if pareto_scale_gb is not None:
+        pareto_scale_bytes = pareto_scale_gb * GB_TO_BYTES
+    else:
+        pareto_scale_bytes = tcfg.get("pareto_scale_bytes", 640 * 1024)
     traffic = GroundStationPoissonTraffic(
         pareto_shape=tcfg["pareto_shape"],
-        pareto_scale_bytes=tcfg.get("pareto_scale_bytes", 640 * 1024),
+        pareto_scale_bytes=pareto_scale_bytes,
         mean_flows_per_min=tcfg.get("mean_flows_per_min", 60.0),
         seed=args.seed,
     )
@@ -154,6 +168,7 @@ def main() -> None:
     hop_counts: List[float] = []
     link_utils: List[float] = []
     flow_delays_ms: Dict[int, float] = {}
+    flow_throughputs_bps: List[float] = []
     for step in range(steps):
         G_t = builder.build_G_t(step)
         H = graph_to_nx(G_t, const_cfg.bandwidth_mhz)
@@ -200,6 +215,7 @@ def main() -> None:
             if fid is not None and fid not in flow_delays_ms:
                 delay_ms = (r.get("avg_packet_delay_s", 0.0) + GROUND_GROUND_DELAY_S) * 1000
                 flow_delays_ms[fid] = delay_ms
+            flow_throughputs_bps.append(r.get("goodput_bps", 0.0))
         print(f"step {step}: {metrics}")
 
     avg_plr = sum(plrs) / len(plrs) if plrs else 0.0
@@ -207,12 +223,21 @@ def main() -> None:
     avg_hops = sum(hop_counts) / len(hop_counts) if hop_counts else 0.0
     avg_link_util = sum(link_utils) / len(link_utils) if link_utils else 0.0
     avg_pkt_delay_ms = sum(flow_delays_ms.values()) / len(flow_delays_ms) if flow_delays_ms else 0.0
+    avg_flow_throughput_bps = (
+        sum(flow_throughputs_bps) / len(flow_throughputs_bps)
+        if flow_throughputs_bps
+        else 0.0
+    )
     print(f"Average packet loss rate over {steps} steps: {avg_plr:.2f}%")
     print(f"Average system throughput over {steps} steps: {avg_thr:.3f} Mbps")
     print(f"Average hop count over {steps} steps: {avg_hops:.2f}")
     print(f"Average link utilization over {steps} steps: {avg_link_util:.3f}")
     print(
         f"Average packet transmission delay over {steps} steps: {avg_pkt_delay_ms:.3f} ms",
+    )
+    print(
+        "Average end-to-end flow throughput over "
+        f"{steps} steps: {avg_flow_throughput_bps / 1e6:.3f} Mbps"
     )
 
 

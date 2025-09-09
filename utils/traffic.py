@@ -319,6 +319,7 @@ def update_loss_and_queue(
         r_in = f.rate_bps
         e2e_latency = 0.0
         q_f = 1.0
+        min_share = float("inf")
         for (u, v) in f.path_edges:
             data = G[u][v]
             share = data.get("share_bps", 0.0)
@@ -328,12 +329,15 @@ def update_loss_and_queue(
             p_k = data.get("p_loss", 0.0)
             q_f *= (1.0 - p_k)
             # One-hop latency including retransmissions: Omega * 1/(1-p_k)
-            hop_base = data.get("tprop_s", 0.0) + (S_bits / r_out if r_out > 0 else 0.0)
+            hop_tx_rate = share
+            hop_base = data.get("tprop_s", 0.0) + (S_bits / hop_tx_rate if hop_tx_rate > 0 else 0.0)
             hop_delay = hop_base / max(1.0 - p_k, 1e-9)
             f.hop_latency_s[(u, v)] = hop_delay
             e2e_latency += hop_delay
             data["R_eff_bps"] += r_out
             r_in = r_out
+            if share > 0:
+                min_share = min(min_share, share)
 
         # Success probability with up to Nmax transmission attempts
         success_prob = 1.0 - (1.0 - q_f) ** max(Nmax, 1)
@@ -344,7 +348,7 @@ def update_loss_and_queue(
         # delays when success probabilities were small.  The delay should
         # instead reflect the time to push one packet across the slowest link,
         # irrespective of whether the packet is ultimately delivered.
-        pkt_delay = S_bits / r_in if r_in > 0 else 0.0
+        pkt_delay = S_bits / min_share if min_share < float("inf") and min_share > 0 else 0.0
         plr_f = 1.0 - success_prob
         results.append(
             {
