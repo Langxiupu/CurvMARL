@@ -172,6 +172,7 @@ def main() -> None:
     plrs: List[float] = []
     hop_counts: List[float] = []
     link_utils: List[float] = []
+    link_caps: List[float] = []
     flow_delays_ms: Dict[int, float] = {}
     flow_throughputs_bps: List[float] = []
     for step in range(steps):
@@ -203,18 +204,25 @@ def main() -> None:
         # Compute average utilization across edges that carried traffic in this step
         util_sum = 0.0
         util_cnt = 0
+        cap_sum = 0.0
+        cap_cnt = 0
         for u, v, data in H.edges(data=True):
             R = data.get("R_tot_bps", 0.0)
             if R > 0:
                 C = data.get("cap_bps", 0.0)
                 util_sum += R / max(C, 1e-9)
                 util_cnt += 1
+                cap_sum += C
+                cap_cnt += 1
         avg_util = util_sum / util_cnt if util_cnt else 0.0
+        avg_cap = cap_sum / cap_cnt if cap_cnt else 0.0
         metrics["avg_link_utilization"] = avg_util
+        metrics["avg_link_capacity_Mbps"] = avg_cap / 1e6
         throughputs.append(metrics["system_throughput_Mbps"])
         plrs.append(metrics["packet_loss_rate"])
         hop_counts.append(metrics["avg_hop_count"])
         link_utils.append(avg_util)
+        link_caps.append(avg_cap)
         for r in results:
             fid = r.get("flow_id")
             if fid is not None and fid not in flow_delays_ms:
@@ -227,6 +235,7 @@ def main() -> None:
     avg_thr = sum(throughputs) / len(throughputs) if throughputs else 0.0
     avg_hops = sum(hop_counts) / len(hop_counts) if hop_counts else 0.0
     avg_link_util = sum(link_utils) / len(link_utils) if link_utils else 0.0
+    avg_link_cap = sum(link_caps) / len(link_caps) if link_caps else 0.0
     avg_pkt_delay_ms = sum(flow_delays_ms.values()) / len(flow_delays_ms) if flow_delays_ms else 0.0
     avg_flow_throughput_bps = (
         sum(flow_throughputs_bps) / len(flow_throughputs_bps)
@@ -237,6 +246,7 @@ def main() -> None:
     print(f"Average system throughput over {steps} steps: {avg_thr:.3f} Mbps")
     print(f"Average hop count over {steps} steps: {avg_hops:.2f}")
     print(f"Average link utilization over {steps} steps: {avg_link_util:.3f}")
+    print(f"Average link capacity over {steps} steps: {avg_link_cap / 1e6:.3f} Mbps")
     print(
         f"Average packet transmission delay over {steps} steps: {avg_pkt_delay_ms:.3f} ms",
     )
