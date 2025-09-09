@@ -83,6 +83,20 @@ class GroundStationTraffic:
         self._active: Dict[int, _FlowState] = {}
 
     # ------------------------------------------------------------------
+    def average_flow_size_bytes(self) -> float:
+        """Return the mean flow size for the configured Pareto distribution."""
+
+        if self.pareto_shape <= 1.0:
+            raise ValueError("pareto_shape must be > 1 for a finite mean")
+        return self.pareto_scale_bytes * self.pareto_shape / (self.pareto_shape - 1.0)
+
+    # ------------------------------------------------------------------
+    def average_rate_bps(self) -> float:
+        """Return the configured per-flow transmission rate in bits/s."""
+
+        return self.rate_bps
+
+    # ------------------------------------------------------------------
     def _sample_size_bits(self) -> float:
         scale = self.pareto_scale_bytes * 8.0
         return scale * self.rng.paretovariate(self.pareto_shape)
@@ -149,6 +163,20 @@ class GroundStationPoissonTraffic:
         self.rng = random.Random(seed)
         self._next_id = 0
         self._active: Dict[int, List[_FlowState]] = {gs.id: [] for gs in self.stations}
+
+    # ------------------------------------------------------------------
+    def average_flow_size_bytes(self) -> float:
+        """Return the mean flow size for the configured Pareto distribution."""
+
+        if self.pareto_shape <= 1.0:
+            raise ValueError("pareto_shape must be > 1 for a finite mean")
+        return self.pareto_scale_bytes * self.pareto_shape / (self.pareto_shape - 1.0)
+
+    # ------------------------------------------------------------------
+    def average_rate_bps(self) -> float:
+        """Return the configured per-flow transmission rate in bits/s."""
+
+        return self.rate_bps
 
     # ------------------------------------------------------------------
     def _sample_size_bits(self) -> float:
