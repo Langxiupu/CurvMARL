@@ -132,14 +132,28 @@ def main() -> None:
     with open(args.config, "r") as f:
         all_cfg = json.load(f)
     cfg_root = all_cfg.get("shortest_path", all_cfg)
-
+    # Override the constellation bandwidth to 500 MHz.  Link capacities are
+    # expressed in bits/s (Mbps when reported) so this only affects the
+    # spectral bandwidth term in ``link_capacity_jsac``.
     const_cfg = ConstellationConfig(**cfg_root["constellation"])
+    const_cfg.bandwidth_mhz = 500.0
     builder = TopologyBuilder(const_cfg)
 
+    # Each simulation step represents one minute of traffic.  The Pareto
+    # distribution minimum (scale) may be provided in gigabytes to describe
+    # flow sizes over that minute.  Convert to bytes here because
+    # ``GroundStationPoissonTraffic`` expects sizes in bytes and internally
+    # converts to bits (1 byte = 8 bits) when computing per-second rates.
     tcfg = cfg_root["traffic"]
+    GB_TO_BYTES = 1024 ** 3
+    pareto_scale_gb = tcfg.get("pareto_scale_gb")
+    if pareto_scale_gb is not None:
+        pareto_scale_bytes = pareto_scale_gb * GB_TO_BYTES
+    else:
+        pareto_scale_bytes = tcfg.get("pareto_scale_bytes", 640 * 1024)
     traffic = GroundStationPoissonTraffic(
         pareto_shape=tcfg["pareto_shape"],
-        pareto_scale_bytes=tcfg.get("pareto_scale_bytes", 640 * 1024),
+        pareto_scale_bytes=pareto_scale_bytes,
         mean_flows_per_min=tcfg.get("mean_flows_per_min", 60.0),
         seed=args.seed,
     )
