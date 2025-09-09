@@ -124,6 +124,7 @@ def main() -> None:
         pareto_shape=1.5,
         pareto_scale_bytes=512 * 1024,
         mean_flows_per_min=5.0,
+        verbose=True,
     )
 
     dt_s = float(cfg.step_seconds)
