@@ -123,6 +123,7 @@ def main() -> None:
 
     dt_s = float(cfg.step_seconds)
     throughputs: List[float] = []
+    pkt_delays: List[float] = []
     for step in range(args.steps):
         G_t = builder.build_G_t(step)
         H = graph_to_nx(G_t)
@@ -148,10 +149,15 @@ def main() -> None:
         )
         metrics = aggregate_metrics(flows, results)
         throughputs.append(metrics["system_throughput_Mbps"])
+        pkt_delays.append(metrics["avg_packet_delay_s"])
         print(f"step {step}: {metrics}")
 
     avg_thr = sum(throughputs) / len(throughputs) if throughputs else 0.0
+    avg_pkt_delay = sum(pkt_delays) / len(pkt_delays) if pkt_delays else 0.0
     print(f"Average system throughput over {args.steps} steps: {avg_thr:.3f} Mbps")
+    print(
+        f"Average packet transmission delay over {args.steps} steps: {avg_pkt_delay:.6f} s"
+    )
 
 
 if __name__ == "__main__":
