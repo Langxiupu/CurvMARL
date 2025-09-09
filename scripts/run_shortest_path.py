@@ -39,14 +39,21 @@ GROUND_GROUND_DELAY_S = 0.040
 def link_capacity_jsac(dist_km: float, bandwidth_mhz: float) -> float:
     """Return link capacity following the JSAC'24 model.
 
-    C(d) = 0.5 * B * log2(1 + 5.85e5 * exp(-3.12e-5 * d))
+    The original implementation contained a numerical error in the
+    signal-to-noise ratio (SNR) term which resulted in unrealistically high
+    link capacities (for instance ~4.8 Gbps for a 500 MHz channel).  The SNR is
+    modelled in dB as ``58.5 - 0.0312 * d`` with ``d`` in kilometres.  To use
+    this in the Shannon capacity formula we must convert the SNR to linear
+    scale: ``10 ** (5.85 - 0.00312 * d)``.  Applying this corrected expression
+    yields much more realistic capacities.
+
+    C(d) = 0.5 * B * log2(1 + 10 ** (5.85 - 0.00312 * d))
     where ``d`` is the inter-satellite distance in km and ``B`` is the
     bandwidth in MHz.
     """
 
-    return 0.5 * bandwidth_mhz * 1e6 * math.log2(
-        1.0 + 5.85e5 * math.exp(-3.12e-5 * dist_km)
-    )
+    snr_linear = 10 ** (5.85 - 0.00312 * dist_km)
+    return 0.5 * bandwidth_mhz * 1e6 * math.log2(1.0 + snr_linear)
 
 
 def graph_to_nx(G, bandwidth_mhz: float) -> nx.DiGraph:
