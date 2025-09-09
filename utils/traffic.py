@@ -245,10 +245,10 @@ def update_loss_and_queue(
     -------
     list of dict
         For each flow, a dictionary with ``flow_id``, ``goodput_bps``,
-        ``latency_s`` and ``q`` (end-to-end success probability),
-        as well as ``avg_packet_delay_s`` which estimates the average
-        transmission time for a single packet as the flow completion
-        time divided by the number of packets.
+        ``latency_s``, ``q`` (end-to-end success probability),
+        ``packet_loss_rate`` and ``avg_packet_delay_s`` which
+        estimates the average transmission time for a single packet as
+        the flow completion time divided by the number of packets.
     """
 
     # Reset per-edge step stats and flow counters
@@ -266,11 +266,14 @@ def update_loss_and_queue(
             edge["R_tot_bps"] += r
             edge["flow_count"] += 1
 
-    # STEP 2: compute equal bandwidth share per edge
+    # STEP 2: compute equal bandwidth share per edge and per-link loss rate
     for u, v, data in G.edges(data=True):
         C = data.get("cap_bps", 0.0)
         n = data.get("flow_count", 0)
         data["share_bps"] = C / n if n > 0 else C
+        R_tot = data.get("R_tot_bps", 0.0)
+        # Single-link loss probability p_k = max(0, 1 - C_k / R_tot_k)
+        data["p_loss"] = max(0.0, 1.0 - C / R_tot) if R_tot > 0 else 0.0
 
     # STEP 3: propagate per-flow rates using the per-edge share
     S_bits = 8 * S_bytes
@@ -278,26 +281,36 @@ def update_loss_and_queue(
     for f in flows:
         r_in = f.rate_bps
         e2e_latency = 0.0
+        q_f = 1.0
         for (u, v) in f.path_edges:
             data = G[u][v]
             share = data.get("share_bps", 0.0)
             r_out = min(r_in, share)
             f.edge_in_bps[(u, v)] = r_in
             f.edge_out_bps[(u, v)] = r_out
-            hop_delay = data.get("tprop_s", 0.0) + (S_bits / r_out if r_out > 0 else 0.0)
+            p_k = data.get("p_loss", 0.0)
+            q_f *= (1.0 - p_k)
+            # One-hop latency including retransmissions: Omega * 1/(1-p_k)
+            hop_base = data.get("tprop_s", 0.0) + (S_bits / r_out if r_out > 0 else 0.0)
+            hop_delay = hop_base / max(1.0 - p_k, 1e-9)
             f.hop_latency_s[(u, v)] = hop_delay
             e2e_latency += hop_delay
             data["R_eff_bps"] += r_out
             r_in = r_out
 
-        goodput = r_in if f.path_edges else 0.0
+        # Success probability with up to Nmax transmission attempts
+        success_prob = 1.0 - (1.0 - q_f) ** max(Nmax, 1)
+        goodput = r_in * success_prob if f.path_edges else 0.0
         pkt_delay = S_bits / goodput if goodput > 0 else 0.0
+        plr_f = 1.0 - success_prob
         results.append(
             {
                 "flow_id": f.id,
                 "goodput_bps": goodput,
                 "latency_s": e2e_latency,
-                "q": 1.0 if f.path_edges else 0.0,
+                "q": success_prob,
+                "success_prob": success_prob,
+                "packet_loss_rate": plr_f,
                 "avg_packet_delay_s": pkt_delay,
             }
         )
@@ -307,7 +320,8 @@ def update_loss_and_queue(
     for u, v, data in G.edges(data=True):
         C = data.get("cap_bps", 0.0)
         R = data.get("R_eff_bps", 0.0)
-        data["p_loss"] = 0.0
+        R_tot = data.get("R_tot_bps", 0.0)
+        data["p_loss"] = data.get("p_loss", 0.0)
         data["rho_eff"] = R / max(C, eps)
         data["A_pkts"] = 0.0
         data["S_pkts"] = 0.0
@@ -318,16 +332,14 @@ def update_loss_and_queue(
 
 def aggregate_metrics(flows: Iterable[Flow], results: Iterable[Dict[str, float]]) -> Dict[str, float]:
     """Aggregate system-level metrics from per-flow results."""
-    total_R = sum(f.rate_bps for f in flows)
     total_G = sum(r["goodput_bps"] for r in results)
-    plr = (total_R - total_G) / total_R if total_R > 0 else 0.0
+    plrs = [r.get("packet_loss_rate", 0.0) for r in results]
+    avg_plr = sum(plrs) / len(plrs) if plrs else 0.0
     latencies = [r["latency_s"] for r in results]
     avg_latency = sum(latencies) / len(latencies) if latencies else 0.0
-    pkt_delays = [r["avg_packet_delay_s"] for r in results if r.get("avg_packet_delay_s", 0.0) > 0]
-    avg_pkt_delay = sum(pkt_delays) / len(pkt_delays) if pkt_delays else 0.0
     return {
-        "packet_loss_rate": plr,
+        # return percentage value
+        "packet_loss_rate": avg_plr * 100.0,
         "avg_delivery_time_s": avg_latency,
-        "avg_packet_delay_s": avg_pkt_delay,
         "system_throughput_Mbps": total_G / 1e6,
     }
