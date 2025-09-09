@@ -11,12 +11,14 @@ serves as a sanity check for the simulation infrastructure.
 import argparse
 import json
 import math
+import os
+import random
+import sys
 from typing import Dict, List
 
 import networkx as nx
+import numpy as np
 
-import sys
-import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from env.topology import ConstellationConfig, TopologyBuilder
@@ -121,7 +123,11 @@ def route_flows(G: nx.DiGraph, flows: List[Flow]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
+    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
 
     with open(args.config, "r") as f:
         all_cfg = json.load(f)
@@ -135,6 +141,7 @@ def main() -> None:
         pareto_shape=tcfg["pareto_shape"],
         pareto_scale_bytes=tcfg.get("pareto_scale_bytes", 640 * 1024),
         mean_flows_per_min=tcfg.get("mean_flows_per_min", 60.0),
+        seed=args.seed,
     )
 
     algo_cfg = cfg_root.get("algo", {})
