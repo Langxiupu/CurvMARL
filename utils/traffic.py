@@ -150,11 +150,10 @@ class GroundStationPoissonTraffic:
         self,
         rate_bps: float,
         pareto_shape: float,
-        pareto_scale_bytes: float = 512 * 1024,
-        mean_flows_per_min: float = 5.0,
+        pareto_scale_bytes: float = 640 * 1024,
+        mean_flows_per_min: float = 60.0,
         stations: Sequence[GroundStation] = GROUND_STATIONS,
         seed: Optional[int] = None,
-        verbose: bool = False,
     ) -> None:
         self.rate_bps = rate_bps
         self.pareto_shape = pareto_shape
@@ -164,7 +163,6 @@ class GroundStationPoissonTraffic:
         self.rng = random.Random(seed)
         self._next_id = 0
         self._active: Dict[int, List[_FlowState]] = {gs.id: [] for gs in self.stations}
-        self.verbose = verbose
 
     # ------------------------------------------------------------------
     def average_flow_size_bytes(self) -> float:
@@ -209,11 +207,6 @@ class GroundStationPoissonTraffic:
                 dst = self._pick_dst(gs.id)
                 size_bits = self._sample_size_bits()
                 st = _FlowState(id=self._next_id, dst=dst, remaining_bits=size_bits)
-                if self.verbose:
-                    size_bytes = size_bits / 8.0
-                    print(
-                        f"Generated flow {st.id} from GS{gs.id} to GS{dst} with Pareto size {size_bytes:.0f} bytes"
-                    )
                 self._next_id += 1
                 active_list.append(st)
 
