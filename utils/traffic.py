@@ -251,95 +251,67 @@ def update_loss_and_queue(
         time divided by the number of packets.
     """
 
-    # Reset per-edge step stats
+    # Reset per-edge step stats and flow counters
     for u, v, data in G.edges(data=True):
         data.setdefault("phi_pkts", 0.0)
-        data["R_tot_bps"] = 0.0  # offered load
-        data["R_eff_bps"] = 0.0  # after upstream losses
+        data["R_tot_bps"] = 0.0
+        data["R_eff_bps"] = 0.0
+        data["flow_count"] = 0
 
-    # STEP 1: accumulate offered arrivals (ignoring losses)
+    # STEP 1: count flows per edge and offered load
     for f in flows:
         r = f.rate_bps
         for (u, v) in f.path_edges:
-            G[u][v]["R_tot_bps"] += r
+            edge = G[u][v]
+            edge["R_tot_bps"] += r
+            edge["flow_count"] += 1
 
-    # STEP 2: congestion-based loss probability
-    eps = 1e-9
+    # STEP 2: compute equal bandwidth share per edge
     for u, v, data in G.edges(data=True):
         C = data.get("cap_bps", 0.0)
-        R_offered = data["R_tot_bps"]
-        data["rho"] = R_offered / max(C, eps)
-        data["p_loss"] = max(0.0, 1.0 - C / max(R_offered, eps)) if R_offered > 0 else 0.0
+        n = data.get("flow_count", 0)
+        data["share_bps"] = C / n if n > 0 else C
 
-    # STEP 3: propagate per-flow rates hop-by-hop
-    for f in flows:
-        f.q_list = []
-        r_in = f.rate_bps
-        for (u, v) in f.path_edges:
-            data = G[u][v]
-            f.edge_in_bps[(u, v)] = r_in
-            p = data["p_loss"]
-            data["R_eff_bps"] += r_in
-            r_out = r_in * (1.0 - p)
-            f.edge_out_bps[(u, v)] = r_out
-            f.q_list.append(1.0 - p)
-            r_in = r_out
-
-    # STEP 4: queue update using effective arrivals
+    # STEP 3: propagate per-flow rates using the per-edge share
     S_bits = 8 * S_bytes
-    for u, v, data in G.edges(data=True):
-        C = data.get("cap_bps", 0.0)
-        R = data["R_eff_bps"]
-        phi = float(data.get("phi_pkts", 0.0))
-
-        A_pkts = (R * dt_s) / S_bits
-        mu_pkts = (C * dt_s) / S_bits
-
-        pre = phi + A_pkts
-        served = min(mu_pkts, pre)
-        post = pre - served
-        overflow = max(0.0, post - K_pkts)
-        phi_next = min(K_pkts, post)
-
-        data["A_pkts"] = A_pkts
-        data["S_pkts"] = served
-        data["D_pkts"] = overflow
-        data["phi_pkts"] = phi_next
-        data["rho_eff"] = R / max(C, eps)
-
-    # STEP 5: per-flow latency and goodput
     results: List[Dict[str, float]] = []
     for f in flows:
-        q_f = 1.0
+        r_in = f.rate_bps
         e2e_latency = 0.0
         for (u, v) in f.path_edges:
-            d = G[u][v]
-            p = d["p_loss"]
-            tau_prop = d.get("tprop_s", 0.0)
-            rho = d.get("rho_eff", 0.0)
-            tau_tran = dt_s * min(1.0, rho)
-            phi = d.get("phi_pkts", 0.0)
-            C = d.get("cap_bps", 0.0)
-            tau_q = (phi * S_bits) / max(C, eps)
+            data = G[u][v]
+            share = data.get("share_bps", 0.0)
+            r_out = min(r_in, share)
+            f.edge_in_bps[(u, v)] = r_in
+            f.edge_out_bps[(u, v)] = r_out
+            hop_delay = data.get("tprop_s", 0.0) + (S_bits / r_out if r_out > 0 else 0.0)
+            f.hop_latency_s[(u, v)] = hop_delay
+            e2e_latency += hop_delay
+            data["R_eff_bps"] += r_out
+            r_in = r_out
 
-            Omega = tau_prop + tau_tran + tau_q
-            Gamma = Omega / max(1.0 - p, 1e-6)
-
-            f.hop_latency_s[(u, v)] = Gamma
-            e2e_latency += Gamma
-            q_f *= (1.0 - p)
-
-        G_f = f.rate_bps * (1.0 - (1.0 - q_f) ** (Nmax + 1))
-        pkt_delay = S_bits / G_f if G_f > 0 else 0.0
+        goodput = r_in if f.path_edges else 0.0
+        pkt_delay = S_bits / goodput if goodput > 0 else 0.0
         results.append(
             {
                 "flow_id": f.id,
-                "goodput_bps": G_f,
+                "goodput_bps": goodput,
                 "latency_s": e2e_latency,
-                "q": q_f,
+                "q": 1.0 if f.path_edges else 0.0,
                 "avg_packet_delay_s": pkt_delay,
             }
         )
+
+    # Update edge utilization stats
+    eps = 1e-9
+    for u, v, data in G.edges(data=True):
+        C = data.get("cap_bps", 0.0)
+        R = data.get("R_eff_bps", 0.0)
+        data["p_loss"] = 0.0
+        data["rho_eff"] = R / max(C, eps)
+        data["A_pkts"] = 0.0
+        data["S_pkts"] = 0.0
+        data["D_pkts"] = 0.0
 
     return results
 
