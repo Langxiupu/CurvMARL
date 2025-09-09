@@ -139,16 +139,10 @@ def main() -> None:
     with open(args.config, "r") as f:
         all_cfg = json.load(f)
     cfg_root = all_cfg.get("shortest_path", all_cfg)
-    # Override the constellation bandwidth to 500 MHz.  Link capacities are
-    # expressed in bits/s (Mbps when reported) so this only affects the
-    # spectral bandwidth term in ``link_capacity_jsac``.
-    # ``ConstellationConfig`` is a ``NamedTuple`` and therefore immutable.  The
-    # previous code attempted to mutate the ``bandwidth_mhz`` field after
-    # instantiation which raised ``AttributeError: can't set attribute``.  Build
-    # the configuration with the desired override instead.
-    const_kwargs = dict(cfg_root["constellation"])
-    const_kwargs["bandwidth_mhz"] = 500.0
-    const_cfg = ConstellationConfig(**const_kwargs)
+    # Build the constellation configuration directly from the provided file
+    # so that bandwidth and other parameters can be tweaked without modifying
+    # the script.
+    const_cfg = ConstellationConfig(**cfg_root["constellation"])
     builder = TopologyBuilder(const_cfg)
 
     # Each simulation step represents one minute of traffic.  The Pareto
