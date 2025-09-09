@@ -274,7 +274,11 @@ def update_loss_and_queue(
     K_pkts: int
         Queue capacity per edge, in packets.
     Nmax: int
-        Maximum number of retransmissions for goodput estimation.
+        Maximum number of transmission attempts (including the initial send).
+        Used both for goodput estimation and to cap the expected number of
+        per-hop retransmissions when computing latency.  The per-hop success
+        probability ``1 - p_k`` is floored at ``0.1`` to prevent pathological
+        delays when a link is near-total loss.
 
     Returns
     -------
@@ -328,13 +332,18 @@ def update_loss_and_queue(
             f.edge_in_bps[(u, v)] = r_in
             f.edge_out_bps[(u, v)] = r_out
             p_k = data.get("p_loss", 0.0)
-            q_f *= (1.0 - p_k)
-            # One-hop latency including retransmissions: Omega_f^k(t) * 1/(1-p_k)
+            # Floor the single-hop success probability to avoid unrealistically
+            # large delays when the loss rate approaches 100%.
+            p_succ = max(1.0 - p_k, 0.1)
+            q_f *= p_succ
+            # One-hop latency including retransmissions with at most ``Nmax``
+            # attempts: Omega_f^k(t) * min(1/(1-p_k), Nmax)
             hop_tx_rate = share
             hop_base = data.get("tprop_s", 0.0) + (
                 S_bits / hop_tx_rate if hop_tx_rate > 0 else 0.0
             )
-            hop_delay = hop_base / max(1.0 - p_k, 1e-9)
+            exp_tx = min(1.0 / p_succ, max(Nmax, 1))
+            hop_delay = hop_base * exp_tx
             f.hop_latency_s[(u, v)] = hop_delay
             e2e_latency += hop_delay
             data["R_eff_bps"] += r_out
