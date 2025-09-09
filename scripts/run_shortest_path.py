@@ -128,7 +128,8 @@ def main() -> None:
 
     dt_s = float(cfg.step_seconds)
     throughputs: List[float] = []
-    pkt_delays: List[float] = []
+    plrs: List[float] = []
+    flow_delays_ms: Dict[int, float] = {}
     for step in range(args.steps):
         G_t = builder.build_G_t(step)
         H = graph_to_nx(G_t)
@@ -142,6 +143,7 @@ def main() -> None:
                 continue
             flows.append(Flow(id=f.id, src=src_sat, dst=dst_sat, rate_bps=f.rate_bps, path_edges=[]))
 
+
         compute_weights(H, args.beta, dt_s)
         route_flows(H, flows)
         results = update_loss_and_queue(
@@ -153,19 +155,27 @@ def main() -> None:
             Nmax=3,
         )
         metrics = aggregate_metrics(flows, results)
+        metrics.pop("avg_delivery_time_s", None)
         # Account for additional ground-to-satellite delay and convert to ms
         base_delay = metrics.pop("avg_packet_delay_s", 0.0)
         total_delay_ms = (base_delay + GROUND_GROUND_DELAY_S) * 1000
         metrics["avg_packet_delay_ms"] = total_delay_ms
         throughputs.append(metrics["system_throughput_Mbps"])
-        pkt_delays.append(total_delay_ms)
+        plrs.append(metrics["packet_loss_rate"])
+        for r in results:
+            fid = r.get("flow_id")
+            if fid is not None and fid not in flow_delays_ms:
+                delay_ms = (r.get("avg_packet_delay_s", 0.0) + GROUND_GROUND_DELAY_S) * 1000
+                flow_delays_ms[fid] = delay_ms
         print(f"step {step}: {metrics}")
 
+    avg_plr = sum(plrs) / len(plrs) if plrs else 0.0
     avg_thr = sum(throughputs) / len(throughputs) if throughputs else 0.0
-    avg_pkt_delay_ms = sum(pkt_delays) / len(pkt_delays) if pkt_delays else 0.0
+    avg_pkt_delay_ms = sum(flow_delays_ms.values()) / len(flow_delays_ms) if flow_delays_ms else 0.0
+    print(f"Average packet loss rate over {args.steps} steps: {avg_plr:.6f}")
     print(f"Average system throughput over {args.steps} steps: {avg_thr:.3f} Mbps")
     print(
-        f"Average packet transmission delay over {args.steps} steps: {avg_pkt_delay_ms:.3f} ms"
+        f"Average packet transmission delay over {args.steps} steps: {avg_pkt_delay_ms:.3f} ms",
     )
 
 
