@@ -299,26 +299,37 @@ def update_loss_and_queue(
         data["R_eff_bps"] = 0.0
         data["flow_count"] = 0
 
-    # STEP 1: count flows per edge and offered load
+    # STEP 1: count how many flows traverse each edge
     for f in flows:
-        r = f.rate_bps
         for (u, v) in f.path_edges:
-            edge = G[u][v]
-            edge["R_tot_bps"] += r
-            edge["flow_count"] += 1
+            G[u][v]["flow_count"] += 1
 
-    # STEP 2: compute equal bandwidth share per edge and per-link loss rate
+    # STEP 2: compute the equal bandwidth share per edge
     for u, v, data in G.edges(data=True):
         C = data.get("cap_bps", 0.0)
         n = data.get("flow_count", 0)
         data["share_bps"] = C / n if n > 0 else C
+
+    # STEP 3: propagate offered load taking upstream bottlenecks into account
+    for f in flows:
+        r_in = f.rate_bps
+        for (u, v) in f.path_edges:
+            data = G[u][v]
+            share = data.get("share_bps", 0.0)
+            # Record the rate that actually reaches this edge
+            data["R_tot_bps"] += r_in
+            r_out = min(r_in, share)
+            f.edge_in_bps[(u, v)] = r_in
+            f.edge_out_bps[(u, v)] = r_out
+            r_in = r_out
+
+    # STEP 4: compute per-link loss probabilities based on updated R_tot
+    for u, v, data in G.edges(data=True):
+        C = data.get("cap_bps", 0.0)
         R_tot = data.get("R_tot_bps", 0.0)
-        # Single-link loss probability p_k = max(0, 1 - C_k / R_tot_k)
-        # See issue: when the offered load R_tot is much larger than the
-        # capacity C the loss rate should approach 100%.
         data["p_loss"] = max(0.0, 1.0 - C / R_tot) if R_tot > 0 else 0.0
 
-    # STEP 3: propagate per-flow rates using the per-edge share
+    # STEP 5: compute per-flow metrics using the derived loss probabilities
     S_bits = 8 * S_bytes
     results: List[Dict[str, float]] = []
     for f in flows:
@@ -329,15 +340,11 @@ def update_loss_and_queue(
             data = G[u][v]
             share = data.get("share_bps", 0.0)
             r_out = min(r_in, share)
-            f.edge_in_bps[(u, v)] = r_in
-            f.edge_out_bps[(u, v)] = r_out
             p_k = data.get("p_loss", 0.0)
             # Floor the single-hop success probability to avoid unrealistically
             # large delays when the loss rate approaches 100%.
             p_succ = max(1.0 - p_k, 0.4)
             q_f *= p_succ
-            # One-hop latency including retransmissions with at most ``Nmax``
-            # attempts: Omega_f^k(t) * min(1/(1-p_k), Nmax)
             hop_tx_rate = share
             hop_base = data.get("tprop_s", 0.0) + (
                 S_bits / hop_tx_rate if hop_tx_rate > 0 else 0.0
@@ -349,10 +356,8 @@ def update_loss_and_queue(
             data["R_eff_bps"] += r_out
             r_in = r_out
 
-        # Success probability with up to Nmax transmission attempts
         success_prob = 1.0 - (1.0 - q_f) ** max(Nmax, 1)
         goodput = r_in * success_prob if f.path_edges else 0.0
-        # Average transmission time for a single packet including retransmissions
         pkt_delay = e2e_latency
         plr_f = 1.0 - success_prob
         results.append(
@@ -372,8 +377,6 @@ def update_loss_and_queue(
     for u, v, data in G.edges(data=True):
         C = data.get("cap_bps", 0.0)
         R = data.get("R_eff_bps", 0.0)
-        R_tot = data.get("R_tot_bps", 0.0)
-        data["p_loss"] = data.get("p_loss", 0.0)
         data["rho_eff"] = R / max(C, eps)
         data["A_pkts"] = 0.0
         data["S_pkts"] = 0.0
