@@ -245,7 +245,10 @@ def update_loss_and_queue(
     -------
     list of dict
         For each flow, a dictionary with ``flow_id``, ``goodput_bps``,
-        ``latency_s`` and ``q`` (end-to-end success probability).
+        ``latency_s`` and ``q`` (end-to-end success probability),
+        as well as ``avg_packet_delay_s`` which estimates the average
+        transmission time for a single packet as the flow completion
+        time divided by the number of packets.
     """
 
     # Reset per-edge step stats
@@ -327,12 +330,14 @@ def update_loss_and_queue(
             q_f *= (1.0 - p)
 
         G_f = f.rate_bps * (1.0 - (1.0 - q_f) ** (Nmax + 1))
+        pkt_delay = S_bits / G_f if G_f > 0 else 0.0
         results.append(
             {
                 "flow_id": f.id,
                 "goodput_bps": G_f,
                 "latency_s": e2e_latency,
                 "q": q_f,
+                "avg_packet_delay_s": pkt_delay,
             }
         )
 
@@ -346,8 +351,11 @@ def aggregate_metrics(flows: Iterable[Flow], results: Iterable[Dict[str, float]]
     plr = (total_R - total_G) / total_R if total_R > 0 else 0.0
     latencies = [r["latency_s"] for r in results]
     avg_latency = sum(latencies) / len(latencies) if latencies else 0.0
+    pkt_delays = [r["avg_packet_delay_s"] for r in results if r.get("avg_packet_delay_s", 0.0) > 0]
+    avg_pkt_delay = sum(pkt_delays) / len(pkt_delays) if pkt_delays else 0.0
     return {
         "packet_loss_rate": plr,
         "avg_delivery_time_s": avg_latency,
+        "avg_packet_delay_s": avg_pkt_delay,
         "system_throughput_Mbps": total_G / 1e6,
     }
