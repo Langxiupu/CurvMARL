@@ -338,7 +338,13 @@ def update_loss_and_queue(
         # Success probability with up to Nmax transmission attempts
         success_prob = 1.0 - (1.0 - q_f) ** max(Nmax, 1)
         goodput = r_in * success_prob if f.path_edges else 0.0
-        pkt_delay = S_bits / goodput if goodput > 0 else 0.0
+        # Estimate the average transmission time per packet based solely on the
+        # bottleneck transmission rate.  Previously this calculation used the
+        # goodput (which already accounts for losses) leading to enormous
+        # delays when success probabilities were small.  The delay should
+        # instead reflect the time to push one packet across the slowest link,
+        # irrespective of whether the packet is ultimately delivered.
+        pkt_delay = S_bits / r_in if r_in > 0 else 0.0
         plr_f = 1.0 - success_prob
         results.append(
             {
