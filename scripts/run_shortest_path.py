@@ -205,7 +205,10 @@ def main() -> None:
         cap_sum = 0.0
         cap_cnt = 0
         for u, v, data in H.edges(data=True):
-            R = data.get("R_tot_bps", 0.0)
+            # Use the effective throughput to compute utilization.  R_tot_bps
+            # represents the offered load which can exceed the capacity and thus
+            # lead to misleading utilization numbers greater than one.
+            R = data.get("R_eff_bps", 0.0)
             if R > 0:
                 C = data.get("cap_bps", 0.0)
                 util_sum += R / max(C, 1e-9)
