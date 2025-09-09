@@ -14,6 +14,10 @@ from typing import Dict, List
 
 import networkx as nx
 
+import sys 
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from env.topology import ConstellationConfig, TopologyBuilder
 from utils.traffic import (
     Flow,
