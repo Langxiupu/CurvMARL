@@ -11,7 +11,7 @@
     },
     "traffic": {
       "pareto_shape": 1.5,
-      "pareto_scale_bytes": 5242880,
+      "pareto_scale_bytes": 52428800,
       "mean_flows_per_min": 60.0
     },
     "algo": {
