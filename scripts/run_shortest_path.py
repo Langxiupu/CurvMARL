@@ -154,6 +154,7 @@ def main() -> None:
     hop_counts: List[float] = []
     link_utils: List[float] = []
     flow_delays_ms: Dict[int, float] = {}
+    flow_throughputs_bps: List[float] = []
     for step in range(steps):
         G_t = builder.build_G_t(step)
         H = graph_to_nx(G_t, const_cfg.bandwidth_mhz)
@@ -200,6 +201,7 @@ def main() -> None:
             if fid is not None and fid not in flow_delays_ms:
                 delay_ms = (r.get("avg_packet_delay_s", 0.0) + GROUND_GROUND_DELAY_S) * 1000
                 flow_delays_ms[fid] = delay_ms
+            flow_throughputs_bps.append(r.get("goodput_bps", 0.0))
         print(f"step {step}: {metrics}")
 
     avg_plr = sum(plrs) / len(plrs) if plrs else 0.0
@@ -207,12 +209,21 @@ def main() -> None:
     avg_hops = sum(hop_counts) / len(hop_counts) if hop_counts else 0.0
     avg_link_util = sum(link_utils) / len(link_utils) if link_utils else 0.0
     avg_pkt_delay_ms = sum(flow_delays_ms.values()) / len(flow_delays_ms) if flow_delays_ms else 0.0
+    avg_flow_throughput_bps = (
+        sum(flow_throughputs_bps) / len(flow_throughputs_bps)
+        if flow_throughputs_bps
+        else 0.0
+    )
     print(f"Average packet loss rate over {steps} steps: {avg_plr:.2f}%")
     print(f"Average system throughput over {steps} steps: {avg_thr:.3f} Mbps")
     print(f"Average hop count over {steps} steps: {avg_hops:.2f}")
     print(f"Average link utilization over {steps} steps: {avg_link_util:.3f}")
     print(
         f"Average packet transmission delay over {steps} steps: {avg_pkt_delay_ms:.3f} ms",
+    )
+    print(
+        "Average end-to-end flow throughput over "
+        f"{steps} steps: {avg_flow_throughput_bps / 1e6:.3f} Mbps"
     )
 
 
