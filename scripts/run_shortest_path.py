@@ -33,15 +33,29 @@ from utils.traffic import (
 GROUND_GROUND_DELAY_S = 0.040
 
 
-def graph_to_nx(G) -> nx.DiGraph:
-    """Convert internal Graph to a networkx.DiGraph."""
+def link_capacity_jsac(dist_km: float, bandwidth_mhz: float) -> float:
+    """Return link capacity following the JSAC'24 model.
+
+    C(d) = 0.5 * B * log2(1 + 5.85e5 * exp(-3.12e-5 * d))
+    where ``d`` is the inter-satellite distance in km and ``B`` is the
+    bandwidth in MHz.
+    """
+
+    return 0.5 * bandwidth_mhz * 1e6 * math.log2(
+        1.0 + 5.85e5 * math.exp(-3.12e-5 * dist_km)
+    )
+
+
+def graph_to_nx(G, bandwidth_mhz: float) -> nx.DiGraph:
+    """Convert internal Graph to a networkx.DiGraph with capacities."""
+
     H = nx.DiGraph()
     for u in range(G.num_nodes):
         H.add_node(u)
     for (u, v) in G.E_physical:
-        cap = G.cap[(u, v)]
-        tprop = G.tprop[(u, v)]
         dist_km = G.dist[(u, v)] / 1000.0
+        cap = link_capacity_jsac(dist_km, bandwidth_mhz)
+        tprop = G.tprop[(u, v)]
         attr = {
             "cap_bps": cap,
             "tprop_s": tprop,
@@ -133,7 +147,7 @@ def main() -> None:
     flow_delays_ms: Dict[int, float] = {}
     for step in range(args.steps):
         G_t = builder.build_G_t(step)
-        H = graph_to_nx(G_t)
+        H = graph_to_nx(G_t, cfg.bandwidth_mhz)
         gs_map = associate_ground_stations(G_t.positions)
         gs_flows = traffic.step(dt_s)
         flows: List[Flow] = []
