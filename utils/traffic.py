@@ -334,7 +334,7 @@ def update_loss_and_queue(
             p_k = data.get("p_loss", 0.0)
             # Floor the single-hop success probability to avoid unrealistically
             # large delays when the loss rate approaches 100%.
-            p_succ = max(1.0 - p_k, 0.1)
+            p_succ = max(1.0 - p_k, 0.4)
             q_f *= p_succ
             # One-hop latency including retransmissions with at most ``Nmax``
             # attempts: Omega_f^k(t) * min(1/(1-p_k), Nmax)
