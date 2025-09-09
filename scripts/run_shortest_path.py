@@ -23,7 +23,7 @@ from utils.traffic import (
     Flow,
     update_loss_and_queue,
     aggregate_metrics,
-    GroundStationTraffic,
+    GroundStationPoissonTraffic,
     GROUND_STATIONS,
 )
 
@@ -113,7 +113,13 @@ def main() -> None:
         epoch_iso="2025-08-08T04:00:00",
     )
     builder = TopologyBuilder(cfg)
-    traffic = GroundStationTraffic(rate_bps=1.6e6, pareto_shape=1.5, pareto_scale_bytes=512 * 1024)
+    # Generate random Poisson arrivals of Pareto-sized flows at each ground station.
+    traffic = GroundStationPoissonTraffic(
+        rate_bps=1.6e6,
+        pareto_shape=1.5,
+        pareto_scale_bytes=512 * 1024,
+        mean_flows_per_min=5.0,
+    )
 
     dt_s = float(cfg.step_seconds)
     throughputs: List[float] = []
