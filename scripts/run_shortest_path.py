@@ -156,10 +156,6 @@ def main() -> None:
         )
         metrics = aggregate_metrics(flows, results)
         metrics.pop("avg_delivery_time_s", None)
-        # Account for additional ground-to-satellite delay and convert to ms
-        base_delay = metrics.pop("avg_packet_delay_s", 0.0)
-        total_delay_ms = (base_delay + GROUND_GROUND_DELAY_S) * 1000
-        metrics["avg_packet_delay_ms"] = total_delay_ms
         throughputs.append(metrics["system_throughput_Mbps"])
         plrs.append(metrics["packet_loss_rate"])
         for r in results:
@@ -172,7 +168,7 @@ def main() -> None:
     avg_plr = sum(plrs) / len(plrs) if plrs else 0.0
     avg_thr = sum(throughputs) / len(throughputs) if throughputs else 0.0
     avg_pkt_delay_ms = sum(flow_delays_ms.values()) / len(flow_delays_ms) if flow_delays_ms else 0.0
-    print(f"Average packet loss rate over {args.steps} steps: {avg_plr:.6f}")
+    print(f"Average packet loss rate over {args.steps} steps: {avg_plr:.2f}%")
     print(f"Average system throughput over {args.steps} steps: {avg_thr:.3f} Mbps")
     print(
         f"Average packet transmission delay over {args.steps} steps: {avg_pkt_delay_ms:.3f} ms",
