@@ -310,6 +310,8 @@ def update_loss_and_queue(
         data["share_bps"] = C / n if n > 0 else C
         R_tot = data.get("R_tot_bps", 0.0)
         # Single-link loss probability p_k = max(0, 1 - C_k / R_tot_k)
+        # See issue: when the offered load R_tot is much larger than the
+        # capacity C the loss rate should approach 100%.
         data["p_loss"] = max(0.0, 1.0 - C / R_tot) if R_tot > 0 else 0.0
 
     # STEP 3: propagate per-flow rates using the per-edge share
@@ -319,7 +321,6 @@ def update_loss_and_queue(
         r_in = f.rate_bps
         e2e_latency = 0.0
         q_f = 1.0
-        min_share = float("inf")
         for (u, v) in f.path_edges:
             data = G[u][v]
             share = data.get("share_bps", 0.0)
@@ -328,27 +329,22 @@ def update_loss_and_queue(
             f.edge_out_bps[(u, v)] = r_out
             p_k = data.get("p_loss", 0.0)
             q_f *= (1.0 - p_k)
-            # One-hop latency including retransmissions: Omega * 1/(1-p_k)
+            # One-hop latency including retransmissions: Omega_f^k(t) * 1/(1-p_k)
             hop_tx_rate = share
-            hop_base = data.get("tprop_s", 0.0) + (S_bits / hop_tx_rate if hop_tx_rate > 0 else 0.0)
+            hop_base = data.get("tprop_s", 0.0) + (
+                S_bits / hop_tx_rate if hop_tx_rate > 0 else 0.0
+            )
             hop_delay = hop_base / max(1.0 - p_k, 1e-9)
             f.hop_latency_s[(u, v)] = hop_delay
             e2e_latency += hop_delay
             data["R_eff_bps"] += r_out
             r_in = r_out
-            if share > 0:
-                min_share = min(min_share, share)
 
         # Success probability with up to Nmax transmission attempts
         success_prob = 1.0 - (1.0 - q_f) ** max(Nmax, 1)
         goodput = r_in * success_prob if f.path_edges else 0.0
-        # Estimate the average transmission time per packet based solely on the
-        # bottleneck transmission rate.  Previously this calculation used the
-        # goodput (which already accounts for losses) leading to enormous
-        # delays when success probabilities were small.  The delay should
-        # instead reflect the time to push one packet across the slowest link,
-        # irrespective of whether the packet is ultimately delivered.
-        pkt_delay = S_bits / min_share if min_share < float("inf") and min_share > 0 else 0.0
+        # Average transmission time for a single packet including retransmissions
+        pkt_delay = e2e_latency
         plr_f = 1.0 - success_prob
         results.append(
             {
