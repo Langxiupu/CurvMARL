@@ -28,11 +28,12 @@ def main():
     args = parser.parse_args()
 
     cfg_all = load_config(args.config)
-    env = build_env(cfg_all["env"])
-    n_agents = cfg_all["env"]["num_sats"]
+    cfg_root = cfg_all.get("mappo", cfg_all)
+    env = build_env(cfg_root["env"])
+    n_agents = cfg_root["env"]["num_sats"]
     algo = MAPPO(env, n_agents, MAPPOConfig())
 
-    rew_cfg = cfg_all.get("rewiring", {"mode": "none"})
+    rew_cfg = cfg_root.get("rewiring", {"mode": "none"})
     rewirer = None
     if rew_cfg.get("mode") != "none" and CurvRewirer is not None:
         rewirer = CurvRewirer(**{k: v for k, v in rew_cfg.items() if k != "mode"})
