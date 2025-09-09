@@ -9,13 +9,19 @@ serves as a sanity check for the simulation infrastructure.
 """
 
 import argparse
-import random
-from typing import List
+import math
+from typing import Dict, List
 
 import networkx as nx
 
 from env.topology import ConstellationConfig, TopologyBuilder
-from utils.traffic import Flow, update_loss_and_queue, aggregate_metrics
+from utils.traffic import (
+    Flow,
+    update_loss_and_queue,
+    aggregate_metrics,
+    GroundStationTraffic,
+    GROUND_STATIONS,
+)
 
 
 def graph_to_nx(G) -> nx.DiGraph:
@@ -38,13 +44,32 @@ def graph_to_nx(G) -> nx.DiGraph:
     return H
 
 
-def random_flows(G: nx.DiGraph, num_flows: int, rate_bps: float) -> List[Flow]:
-    nodes = list(G.nodes)
-    flows: List[Flow] = []
-    for fid in range(num_flows):
-        src, dst = random.sample(nodes, 2)
-        flows.append(Flow(id=fid, src=src, dst=dst, rate_bps=rate_bps, path_edges=[]))
-    return flows
+def geodetic_to_ecef(lat_deg: float, lon_deg: float, Re_km: float = 6378.137):
+    lat = math.radians(lat_deg)
+    lon = math.radians(lon_deg)
+    x = Re_km * math.cos(lat) * math.cos(lon)
+    y = Re_km * math.cos(lat) * math.sin(lon)
+    z = Re_km * math.sin(lat)
+    return x, y, z
+
+
+def associate_ground_stations(pos: Dict[int, tuple]) -> Dict[int, int]:
+    """Map each ground station to its nearest visible satellite."""
+    mapping: Dict[int, int] = {}
+    for gs in GROUND_STATIONS:
+        gs_vec = geodetic_to_ecef(gs.lat_deg, gs.lon_deg)
+        best, best_dist = None, 1e12
+        for sid, svec in pos.items():
+            rel = (svec[0] - gs_vec[0], svec[1] - gs_vec[1], svec[2] - gs_vec[2])
+            dot_val = gs_vec[0] * rel[0] + gs_vec[1] * rel[1] + gs_vec[2] * rel[2]
+            if dot_val <= 0:
+                continue
+            dist = math.sqrt(rel[0] ** 2 + rel[1] ** 2 + rel[2] ** 2)
+            if dist < best_dist:
+                best, best_dist = sid, dist
+        if best is not None:
+            mapping[gs.id] = best
+    return mapping
 
 
 def compute_weights(G: nx.DiGraph, beta: float, dt_s: float) -> None:
@@ -84,16 +109,27 @@ def main() -> None:
         epoch_iso="2025-08-08T04:00:00",
     )
     builder = TopologyBuilder(cfg)
-    G0 = builder.build_G_t(0)
-    G = graph_to_nx(G0)
-    flows = random_flows(G, num_flows=4, rate_bps=1.6e6)
+    traffic = GroundStationTraffic(rate_bps=1.6e6, pareto_shape=1.5, pareto_scale_bytes=512 * 1024)
 
     dt_s = float(cfg.step_seconds)
+    throughputs: List[float] = []
     for step in range(args.steps):
-        compute_weights(G, args.beta, dt_s)
-        route_flows(G, flows)
+        G_t = builder.build_G_t(step)
+        H = graph_to_nx(G_t)
+        gs_map = associate_ground_stations(G_t.positions)
+        gs_flows = traffic.step(dt_s)
+        flows: List[Flow] = []
+        for f in gs_flows:
+            src_sat = gs_map.get(f.src)
+            dst_sat = gs_map.get(f.dst)
+            if src_sat is None or dst_sat is None:
+                continue
+            flows.append(Flow(id=f.id, src=src_sat, dst=dst_sat, rate_bps=f.rate_bps, path_edges=[]))
+
+        compute_weights(H, args.beta, dt_s)
+        route_flows(H, flows)
         results = update_loss_and_queue(
-            G,
+            H,
             flows,
             dt_s=dt_s,
             S_bytes=1500,
@@ -101,7 +137,11 @@ def main() -> None:
             Nmax=3,
         )
         metrics = aggregate_metrics(flows, results)
+        throughputs.append(metrics["system_throughput_Mbps"])
         print(f"step {step}: {metrics}")
+
+    avg_thr = sum(throughputs) / len(throughputs) if throughputs else 0.0
+    print(f"Average system throughput over {args.steps} steps: {avg_thr:.3f} Mbps")
 
 
 if __name__ == "__main__":
