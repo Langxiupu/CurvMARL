@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Iterable, Optional, Sequence
+from typing import Dict, List, Tuple, Iterable, Optional, Sequence, TYPE_CHECKING
 
 import random
 import math
-import networkx as nx
+
+if TYPE_CHECKING:  # pragma: no cover - used for type hints only
+    import networkx as nx
 
 
 __all__ = [
@@ -215,7 +217,7 @@ class Flow:
 
 
 def update_loss_and_queue(
-    G: nx.DiGraph,
+    G: 'nx.DiGraph',
     flows: Iterable[Flow],
     dt_s: float,
     S_bytes: int,
@@ -250,6 +252,8 @@ def update_loss_and_queue(
         estimates the average transmission time for a single packet as
         the flow completion time divided by the number of packets.
     """
+
+    import networkx as nx
 
     # Reset per-edge step stats and flow counters
     for u, v, data in G.edges(data=True):
@@ -331,15 +335,24 @@ def update_loss_and_queue(
 
 
 def aggregate_metrics(flows: Iterable[Flow], results: Iterable[Dict[str, float]]) -> Dict[str, float]:
-    """Aggregate system-level metrics from per-flow results."""
+    """Aggregate system-level metrics from per-flow results.
+
+    Returns a dictionary containing the average packet loss rate, average
+    end-to-end delivery time, system throughput (both in bps and Mbps) and the
+    average number of hops traversed by successful flows.
+    """
     total_G = sum(r["goodput_bps"] for r in results)
     plrs = [r.get("packet_loss_rate", 0.0) for r in results]
     avg_plr = sum(plrs) / len(plrs) if plrs else 0.0
     latencies = [r["latency_s"] for r in results]
     avg_latency = sum(latencies) / len(latencies) if latencies else 0.0
+    hop_counts = [len(f.path_edges) for f in flows if f.path_edges]
+    avg_hops = sum(hop_counts) / len(hop_counts) if hop_counts else 0.0
     return {
         # return percentage value
         "packet_loss_rate": avg_plr * 100.0,
         "avg_delivery_time_s": avg_latency,
         "system_throughput_Mbps": total_G / 1e6,
+        "system_throughput_bps": total_G,
+        "avg_hop_count": avg_hops,
     }

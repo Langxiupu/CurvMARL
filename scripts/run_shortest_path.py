@@ -129,6 +129,7 @@ def main() -> None:
     dt_s = float(cfg.step_seconds)
     throughputs: List[float] = []
     plrs: List[float] = []
+    hop_counts: List[float] = []
     flow_delays_ms: Dict[int, float] = {}
     for step in range(args.steps):
         G_t = builder.build_G_t(step)
@@ -158,6 +159,7 @@ def main() -> None:
         metrics.pop("avg_delivery_time_s", None)
         throughputs.append(metrics["system_throughput_Mbps"])
         plrs.append(metrics["packet_loss_rate"])
+        hop_counts.append(metrics["avg_hop_count"])
         for r in results:
             fid = r.get("flow_id")
             if fid is not None and fid not in flow_delays_ms:
@@ -167,9 +169,11 @@ def main() -> None:
 
     avg_plr = sum(plrs) / len(plrs) if plrs else 0.0
     avg_thr = sum(throughputs) / len(throughputs) if throughputs else 0.0
+    avg_hops = sum(hop_counts) / len(hop_counts) if hop_counts else 0.0
     avg_pkt_delay_ms = sum(flow_delays_ms.values()) / len(flow_delays_ms) if flow_delays_ms else 0.0
     print(f"Average packet loss rate over {args.steps} steps: {avg_plr:.2f}%")
     print(f"Average system throughput over {args.steps} steps: {avg_thr:.3f} Mbps")
+    print(f"Average hop count over {args.steps} steps: {avg_hops:.2f}")
     print(
         f"Average packet transmission delay over {args.steps} steps: {avg_pkt_delay_ms:.3f} ms",
     )
