@@ -349,5 +349,5 @@ def aggregate_metrics(flows: Iterable[Flow], results: Iterable[Dict[str, float]]
     return {
         "packet_loss_rate": plr,
         "avg_delivery_time_s": avg_latency,
-        "system_throughput_bps": total_G,
+        "system_throughput_Mbps": total_G / 1e6,
     }
