@@ -28,6 +28,11 @@ from utils.traffic import (
 )
 
 
+# Total ground-to-satellite transmission delay for a packet travelling
+# from one ground station to another (two hops).
+GROUND_GROUND_DELAY_S = 0.040
+
+
 def graph_to_nx(G) -> nx.DiGraph:
     """Convert internal Graph to a networkx.DiGraph."""
     H = nx.DiGraph()
@@ -148,15 +153,19 @@ def main() -> None:
             Nmax=3,
         )
         metrics = aggregate_metrics(flows, results)
+        # Account for additional ground-to-satellite delay and convert to ms
+        base_delay = metrics.pop("avg_packet_delay_s", 0.0)
+        total_delay_ms = (base_delay + GROUND_GROUND_DELAY_S) * 1000
+        metrics["avg_packet_delay_ms"] = total_delay_ms
         throughputs.append(metrics["system_throughput_Mbps"])
-        pkt_delays.append(metrics["avg_packet_delay_s"])
+        pkt_delays.append(total_delay_ms)
         print(f"step {step}: {metrics}")
 
     avg_thr = sum(throughputs) / len(throughputs) if throughputs else 0.0
-    avg_pkt_delay = sum(pkt_delays) / len(pkt_delays) if pkt_delays else 0.0
+    avg_pkt_delay_ms = sum(pkt_delays) / len(pkt_delays) if pkt_delays else 0.0
     print(f"Average system throughput over {args.steps} steps: {avg_thr:.3f} Mbps")
     print(
-        f"Average packet transmission delay over {args.steps} steps: {avg_pkt_delay:.6f} s"
+        f"Average packet transmission delay over {args.steps} steps: {avg_pkt_delay_ms:.3f} ms"
     )
 
 
