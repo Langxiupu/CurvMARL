@@ -1,3 +1,5 @@
+"""Generic MAPPO training script driven by JSON configuration files."""
+
 import argparse
 import json
 
@@ -23,8 +25,10 @@ def build_env(cfg_dict):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
-    parser.add_argument("--updates", type=int, default=1)
-    parser.add_argument("--rollout", type=int, default=4)
+    parser.add_argument("--updates", type=int, default=100000,
+                        help="total training iterations")
+    parser.add_argument("--rollout", type=int, default=200,
+                        help="episode length in environment steps")
     args = parser.parse_args()
 
     cfg_all = load_config(args.config)
@@ -39,7 +43,7 @@ def main():
         rewirer = CurvRewirer(**{k: v for k, v in rew_cfg.items() if k != "mode"})
 
     for _ in range(args.updates):
-        buf = algo.rollout(args.rollout, rewirer=rewirer)
+        buf, _ = algo.rollout(args.rollout, rewirer=rewirer)
         algo.update(buf)
     print("training completed")
 

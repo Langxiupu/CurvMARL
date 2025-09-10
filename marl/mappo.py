@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
 
+import numpy as np
 import torch
 from torch import nn
 from torch.distributions import Categorical
@@ -228,8 +229,9 @@ class MAPPO:
         return actions, torch.tensor(action_idx, dtype=torch.long), torch.tensor(logps, dtype=torch.float32)
 
     # ------------------------------------------------------------------
-    def rollout(self, T: int, rewirer=None) -> RolloutBuffer:
+    def rollout(self, T: int, rewirer=None) -> Tuple[RolloutBuffer, List[Dict[str, float]]]:
         buf = RolloutBuffer()
+        metrics: List[Dict[str, float]] = []
         G_phys = self.env.reset()
         for t in range(T):
             if rewirer is None:
@@ -238,15 +240,25 @@ class MAPPO:
                 G_logic = rewirer.build_logic_topology(G_phys)
             emb, act_neighbors, edge_feats, idx_map = self._forward(G_logic, G_phys)
             act_dict, a_idx, logps = self.sample_actions(emb, act_neighbors, edge_feats, idx_map)
-            global_feats = torch.tensor(
-                [0.0, 0.0, 0.0], dtype=torch.float32
-            )
+
+            caps = [e.get("cap_bps", 0.0) for _, _, e in G_phys.edges(data=True)]
+            utils = [
+                e.get("R_tot_bps", 0.0) / max(e.get("cap_bps", 1e-9), 1e-9)
+                for _, _, e in G_phys.edges(data=True)
+            ]
+            delays = [e.get("tprop_s", 0.0) for _, _, e in G_phys.edges(data=True)]
+            avg_cap = float(np.mean(caps)) / 1e6 if caps else 0.0
+            avg_util = float(np.mean(utils)) if utils else 0.0
+            avg_delay = float(np.mean(delays)) * 1000.0 if delays else 0.0
+            global_feats = torch.tensor([avg_cap, avg_delay, avg_util], dtype=torch.float32)
+
             values = self.critic(emb, global_feats)
             G_phys, r, done, info = self.env.step(act_dict)
             buf.add(emb.detach(), a_idx.detach(), logps.detach(), values.detach(), r, done)
+            metrics.append(info.get("metrics", {}))
             if done:
                 break
-        return buf
+        return buf, metrics
 
     # ------------------------------------------------------------------
     def update(self, buf: RolloutBuffer) -> None:
