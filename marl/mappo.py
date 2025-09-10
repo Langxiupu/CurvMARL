@@ -261,13 +261,16 @@ class MAPPO:
         return buf, metrics
 
     # ------------------------------------------------------------------
-    def update(self, buf: RolloutBuffer) -> None:
+    def update(self, buf: RolloutBuffer) -> Tuple[float, float]:
         rewards = torch.stack(buf.rewards)
         values = torch.stack(buf.values)
         dones = torch.stack(buf.dones)
         adv, ret = compute_gae(rewards.unsqueeze(-1).expand_as(values), values, dones, self.cfg.gamma, self.cfg.lam)
         adv = (adv - adv.mean()) / (adv.std() + 1e-8)
         T, N = adv.shape
+        pol_loss_total = 0.0
+        val_loss_total = 0.0
+        count = 0
         for epoch in range(self.cfg.epochs):
             idx = torch.randperm(T * N)
             for start in range(0, T * N, self.cfg.minibatch):
@@ -292,3 +295,10 @@ class MAPPO:
                 nn.utils.clip_grad_norm_(self.actor_backbone.parameters(), 0.5)
                 self.opt_actor.step()
                 self.opt_critic.step()
+
+                pol_loss_total += actor_loss.item()
+                val_loss_total += value_loss.item()
+                count += 1
+        avg_pol = pol_loss_total / count if count else 0.0
+        avg_val = val_loss_total / count if count else 0.0
+        return avg_pol, avg_val

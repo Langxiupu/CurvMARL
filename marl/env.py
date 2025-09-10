@@ -197,12 +197,13 @@ class MultiSatEnv:
         metrics = aggregate_metrics(self.flows, results)
         overflow = sum(self.G_phys[u][v].get("D_pkts", 0.0) for u, v in self.G_phys.edges)
 
-        reward = (
-            self.cfg.w1 * metrics["system_throughput_bps"] / 1e9
-            - self.cfg.w2 * metrics["avg_delivery_time_s"]
-            - 0.01 * overflow
-            - 1.0 * loop_penalty
-        )
+        # Reward follows w1 * (Gamma / bar_Gamma) - w2 * (G / bar_G)
+        flow_terms = [
+            self.cfg.w1 * r.get("goodput_bps", 0.0) / 1e9
+            - self.cfg.w2 * r.get("latency_s", 0.0)
+            for r in results
+        ]
+        reward = sum(flow_terms) / len(flow_terms) if flow_terms else 0.0
         info = {
             "metrics": metrics,
             "overflow": overflow,
