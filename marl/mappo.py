@@ -375,7 +375,15 @@ class MAPPO:
 
                 self.opt_actor.zero_grad()
                 self.opt_critic.zero_grad()
-                loss.backward()
+                # ``logp`` entries stored in the rollout buffer still retain
+                # their computation graph from the sampling phase.  During PPO
+                # updates we iterate over the same stored tensors multiple
+                # times, which would normally free the graph after the first
+                # backward call and raise ``RuntimeError: Trying to backward
+                # through the graph a second time`` on subsequent iterations.
+                # Retaining the graph allows multiple backward passes over the
+                # same rollout data without reconstructing it every epoch.
+                loss.backward(retain_graph=True)
                 nn.utils.clip_grad_norm_(self.actor_backbone.parameters(), 0.5)
                 self.opt_actor.step()
                 self.opt_critic.step()
