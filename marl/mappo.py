@@ -149,33 +149,96 @@ class MAPPO:
         self.opt_critic = torch.optim.Adam(self.critic.parameters(), lr=cfg.lr_critic)
 
     # ------------------------------------------------------------------
-    def _forward(self, G_logic, G_phys) -> Tuple[torch.Tensor, Dict[int, List[int]], Dict[Tuple[int, int], torch.Tensor]]:
-        """Run the actor backbone on each agent's local neighbourhood."""
+    def _pick_active_nodes(self, G_phys) -> List[int]:
+        """Return satellites currently carrying traffic.
 
-        nodes = list(G_logic.nodes)
-        idx_map = {n: i for i, n in enumerate(nodes)}
+        Nodes with either queued packets or non-zero throughput are
+        considered active.  Satellites currently serving any ground station
+        are also included so that newly generated flows receive an action.
+        """
 
-        embeddings: List[torch.Tensor] = []
+        active = {
+            u
+            for u, v, data in G_phys.edges(data=True)
+            if data.get("phi_pkts", 0.0) > 0.0 or data.get("R_tot_bps", 0.0) > 0.0
+        }
+
+        try:  # private helper on ``MultiSatEnv``
+            gs_map = self.env._associate_ground_stations()
+            active.update(gs_map.values())
+        except AttributeError:  # pragma: no cover - fallback if env changes
+            pass
+
+        return sorted(active)
+
+    # ------------------------------------------------------------------
+    def _forward(
+        self,
+        G_logic,
+        G_phys,
+        centers: Optional[Iterable[int]] = None,
+    ) -> Tuple[
+        torch.Tensor,
+        Dict[int, List[int]],
+        Dict[Tuple[int, int], torch.Tensor],
+        Dict[int, int],
+    ]:
+        """Run the actor backbone on selected agents.
+
+        Parameters
+        ----------
+        G_logic, G_phys:
+            Logical and physical topologies.
+        centers:
+            Optional iterable of agent identifiers that require decisions.
+            When ``None`` all nodes in ``G_logic`` are processed.  The method
+            constructs a union of the ``L``-hop ego networks around the
+            specified centres and runs the GAT once on this sub-graph.  This is
+            considerably faster than invoking the backbone separately for every
+            agent and enables inference on a subset of nodes (e.g. only those
+            with traffic).
+        """
+
+        if centers is None:
+            centers = list(G_logic.nodes)
+
+        center_to_sub: List[Tuple[int, List[int]]] = []
+        all_nodes: List[int] = []
+        for c in centers:
+            nodes = self.ob_builder.ego_nodes(G_logic, c)
+            center_to_sub.append((c, nodes))
+            all_nodes.extend(nodes)
+
+        # Deduplicate nodes while preserving order so that ``idx_map`` remains
+        # stable across calls when ``centers`` is identical.
+        uniq_nodes: List[int] = list(dict.fromkeys(all_nodes))
+        X = self.ob_builder.node_features(G_logic, uniq_nodes)
+        edge_index, edge_attr = self.ob_builder.edge_arrays(G_logic, uniq_nodes)
+        emb_sub = self.actor_backbone(X, edge_index, edge_attr)
+
+        # Embed only the required nodes but return a tensor covering the full
+        # constellation so that downstream code expecting a fixed number of
+        # agents continues to work.
+        emb_dim = emb_sub.size(1)
+        emb = torch.zeros(self.n_agents, emb_dim, dtype=emb_sub.dtype, device=emb_sub.device)
+        idx_sub = {n: i for i, n in enumerate(uniq_nodes)}
+        for n, i in idx_sub.items():
+            emb[n] = emb_sub[i]
+
+        idx_map = {n: n for n in range(self.n_agents)}
         act_neighbors: Dict[int, List[int]] = {}
         edge_feats: Dict[Tuple[int, int], torch.Tensor] = {}
 
-        for i in nodes:
-            ego = self.ob_builder.ego_nodes(G_logic, i)
-            X = self.ob_builder.node_features(G_logic, ego)
-            edge_index, edge_attr = self.ob_builder.edge_arrays(G_logic, ego)
-            emb_sub = self.actor_backbone(X, edge_index, edge_attr)
-            center_idx = ego.index(i)
-            embeddings.append(emb_sub[center_idx])
-
+        for c, _ in center_to_sub:
             nbrs = [
                 j
-                for j in G_phys.neighbors(i)
-                if G_phys[i][j].get("cap_bps", 0.0) > 0.0
+                for j in G_phys.neighbors(c)
+                if G_phys[c][j].get("cap_bps", 0.0) > 0.0
             ]
-            act_neighbors[i] = nbrs
+            act_neighbors[c] = nbrs
             for j in nbrs:
-                e = G_phys[i][j]
-                edge_feats[(idx_map[i], idx_map[j])] = torch.tensor(
+                e = G_phys[c][j]
+                edge_feats[(idx_map[c], idx_map[j])] = torch.tensor(
                     [
                         e.get("cap_bps", 0.0) / 1e9,
                         e.get("R_tot_bps", 0.0)
@@ -188,7 +251,6 @@ class MAPPO:
                     dtype=torch.float32,
                 )
 
-        emb = torch.stack(embeddings)
         return emb, act_neighbors, edge_feats, idx_map
 
     # ------------------------------------------------------------------
@@ -223,7 +285,13 @@ class MAPPO:
             actions[i] = act_neighbors[i][a.item()]
             action_idx.append(a)
             logps.append(dist.log_prob(a))
-        return actions, torch.stack(action_idx).long(), torch.stack(logps)
+        if action_idx:
+            a_idx_tensor = torch.stack(action_idx).long()
+            logp_tensor = torch.stack(logps)
+        else:  # no active agents
+            a_idx_tensor = torch.zeros(0, dtype=torch.long)
+            logp_tensor = torch.zeros(0)
+        return actions, a_idx_tensor, logp_tensor
 
     # ------------------------------------------------------------------
     def rollout(self, T: int, rewirer=None, reset: bool = True) -> Tuple[RolloutBuffer, List[Dict[str, float]]]:
@@ -238,7 +306,16 @@ class MAPPO:
                 G_logic = G_phys
             else:
                 G_logic = rewirer.build_logic_topology(G_phys)
-            emb, act_neighbors, edge_feats, idx_map = self._forward(G_logic, G_phys)
+            centers = self._pick_active_nodes(G_phys)
+            if centers:
+                emb, act_neighbors, edge_feats, idx_map = self._forward(
+                    G_logic, G_phys, centers
+                )
+            else:  # no active satellites; skip forward pass entirely
+                d_emb = self.actor_backbone.layers[-1].W.out_features
+                emb = torch.zeros(self.n_agents, d_emb)
+                act_neighbors, edge_feats = {}, {}
+                idx_map = {n: n for n in range(self.n_agents)}
             act_dict, a_idx, logps = self.sample_actions(emb, act_neighbors, edge_feats, idx_map)
 
             caps = [e.get("cap_bps", 0.0) for _, _, e in G_phys.edges(data=True)]
@@ -252,7 +329,11 @@ class MAPPO:
             avg_delay = float(np.mean(delays)) * 1000.0 if delays else 0.0
             global_feats = torch.tensor([avg_cap, avg_delay, avg_util], dtype=torch.float32)
 
-            values = self.critic(emb.detach(), global_feats)
+            values = (
+                self.critic(emb.detach(), global_feats)
+                if emb.numel() > 0
+                else torch.zeros(0)
+            )
             G_phys, r, done, info = self.env.step(act_dict)
             buf.add(emb.detach(), a_idx.detach(), logps, values, r, done)
             metrics.append(info.get("metrics", {}))
