@@ -229,10 +229,13 @@ class MAPPO:
         return actions, torch.tensor(action_idx, dtype=torch.long), torch.tensor(logps, dtype=torch.float32)
 
     # ------------------------------------------------------------------
-    def rollout(self, T: int, rewirer=None) -> Tuple[RolloutBuffer, List[Dict[str, float]]]:
+    def rollout(self, T: int, rewirer=None, reset: bool = True) -> Tuple[RolloutBuffer, List[Dict[str, float]]]:
         buf = RolloutBuffer()
         metrics: List[Dict[str, float]] = []
-        G_phys = self.env.reset()
+        if reset:
+            G_phys = self.env.reset()
+        else:
+            G_phys = self.env.G_phys
         for t in range(T):
             if rewirer is None:
                 G_logic = G_phys
