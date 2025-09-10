@@ -142,12 +142,9 @@ class MAPPO:
         d_x = 6
         d_e = 6
         self.actor_backbone = GATBackbone(d_x=d_x, d_e=d_e)
-        self.policy_head = PolicyHead(d_in=self.actor_backbone.layers[-1].W.out_features // self.actor_backbone.layers[-1].heads, d_e=d_e)
-        self.critic = CentralisedCritic(
-            d_emb=self.actor_backbone.layers[-1].W.out_features
-            * self.actor_backbone.layers[-1].heads,
-            n_agents=n_agents,
-        )
+        emb_dim = self.actor_backbone.layers[-1].W.out_features
+        self.policy_head = PolicyHead(d_in=emb_dim, d_e=d_e)
+        self.critic = CentralisedCritic(d_emb=emb_dim, n_agents=n_agents)
         self.opt_actor = torch.optim.Adam(self.actor_backbone.parameters(), lr=cfg.lr_actor)
         self.opt_critic = torch.optim.Adam(self.critic.parameters(), lr=cfg.lr_critic)
 
