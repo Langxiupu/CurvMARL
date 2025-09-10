@@ -207,23 +207,23 @@ class MAPPO:
         """
 
         actions: Dict[int, int] = {}
-        action_idx: List[int] = []
-        logps: List[float] = []
+        action_idx: List[torch.Tensor] = []
+        logps: List[torch.Tensor] = []
         center_idx = [idx_map[i] for i in act_neighbors.keys()]
         nbrs = [[idx_map[j] for j in act_neighbors[i]] for i in act_neighbors.keys()]
         logits_list = self.policy_head(emb, center_idx, nbrs, edge_feats)
         for i, logits, nbr in zip(act_neighbors.keys(), logits_list, nbrs):
             if logits.numel() == 0:
                 actions[i] = i
-                action_idx.append(0)
-                logps.append(0.0)
+                action_idx.append(torch.tensor(0))
+                logps.append(torch.tensor(0.0))
                 continue
             dist = Categorical(logits=logits)
             a = dist.sample()
             actions[i] = act_neighbors[i][a.item()]
-            action_idx.append(a.item())
-            logps.append(dist.log_prob(a).item())
-        return actions, torch.tensor(action_idx, dtype=torch.long), torch.tensor(logps, dtype=torch.float32)
+            action_idx.append(a)
+            logps.append(dist.log_prob(a))
+        return actions, torch.stack(action_idx).long(), torch.stack(logps)
 
     # ------------------------------------------------------------------
     def rollout(self, T: int, rewirer=None, reset: bool = True) -> Tuple[RolloutBuffer, List[Dict[str, float]]]:
@@ -252,9 +252,9 @@ class MAPPO:
             avg_delay = float(np.mean(delays)) * 1000.0 if delays else 0.0
             global_feats = torch.tensor([avg_cap, avg_delay, avg_util], dtype=torch.float32)
 
-            values = self.critic(emb, global_feats)
+            values = self.critic(emb.detach(), global_feats)
             G_phys, r, done, info = self.env.step(act_dict)
-            buf.add(emb.detach(), a_idx.detach(), logps.detach(), values.detach(), r, done)
+            buf.add(emb.detach(), a_idx.detach(), logps, values, r, done)
             metrics.append(info.get("metrics", {}))
             if done:
                 break
@@ -265,7 +265,13 @@ class MAPPO:
         rewards = torch.stack(buf.rewards)
         values = torch.stack(buf.values)
         dones = torch.stack(buf.dones)
-        adv, ret = compute_gae(rewards.unsqueeze(-1).expand_as(values), values, dones, self.cfg.gamma, self.cfg.lam)
+        adv, ret = compute_gae(
+            rewards.unsqueeze(-1).expand_as(values),
+            values.detach(),
+            dones,
+            self.cfg.gamma,
+            self.cfg.lam,
+        )
         adv = (adv - adv.mean()) / (adv.std() + 1e-8)
         T, N = adv.shape
         pol_loss_total = 0.0
@@ -278,15 +284,11 @@ class MAPPO:
                 mb_idx = idx[start:end]
                 mb_adv = adv.view(-1)[mb_idx]
                 mb_ret = ret.view(-1)[mb_idx]
-                mb_logp_old = torch.stack(buf.logprobs).view(-1)[mb_idx]
-                mb_actions = torch.stack(buf.actions).view(-1)[mb_idx]
+                mb_logp = torch.stack(buf.logprobs).view(-1)[mb_idx]
+                mb_vals = values.view(-1)[mb_idx]
 
-                # For simplicity we reuse old logprobs as new ones (no recompute)
-                ratio = torch.exp(mb_logp_old - mb_logp_old)
-                surr1 = ratio * mb_adv
-                surr2 = torch.clamp(ratio, 1.0 - self.cfg.clip, 1.0 + self.cfg.clip) * mb_adv
-                actor_loss = -(torch.min(surr1, surr2).mean())
-                value_loss = nn.functional.mse_loss(mb_ret, mb_ret.detach())
+                actor_loss = -(mb_logp * mb_adv.detach()).mean()
+                value_loss = nn.functional.mse_loss(mb_vals, mb_ret.detach())
                 loss = actor_loss + self.cfg.vf_coef * value_loss
 
                 self.opt_actor.zero_grad()
