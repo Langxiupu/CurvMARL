@@ -13,13 +13,13 @@ from marl.mappo import MAPPO, MAPPOConfig, CentralisedCritic
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--updates", type=int, default=1)
-    parser.add_argument("--rollout", type=int, default=4)
+    parser.add_argument("--updates", type=int, default=2000)
+    parser.add_argument("--rollout", type=int, default=50)
     args = parser.parse_args()
 
     env_cfg = EnvConfig(
         num_sats=720,
-        num_steps=args.rollout,
+        num_steps=200,
         altitude_km=570.0,
         inclination_deg=70.0,
     )
@@ -46,13 +46,16 @@ def main():
     delays_ms = []
     throughputs = []
 
+    env.reset()
     for _ in range(args.updates):
-        buf, metrics = algo.rollout(args.rollout)
+        buf, metrics = algo.rollout(args.rollout, reset=False)
         algo.update(buf)
         for m in metrics:
             plrs.append(m.get("packet_loss_rate", 0.0))
             delays_ms.append(m.get("avg_delivery_time_s", 0.0) * 1000.0)
             throughputs.append(m.get("system_throughput_Mbps", 0.0))
+        if env.step_idx >= env_cfg.num_steps:
+            env.reset()
 
     avg_plr = sum(plrs) / len(plrs) if plrs else 0.0
     avg_delay = sum(delays_ms) / len(delays_ms) if delays_ms else 0.0

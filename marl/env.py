@@ -1,3 +1,4 @@
+import math
 import random
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
@@ -5,7 +6,14 @@ from typing import Dict, List, Tuple, Optional
 import networkx as nx
 
 from env.topology import ConstellationConfig, TopologyBuilder
-from utils.traffic import Flow, update_loss_and_queue, aggregate_metrics
+from utils.traffic import (
+    Flow,
+    update_loss_and_queue,
+    aggregate_metrics,
+    GroundStationPoissonTraffic,
+    GROUND_STATIONS,
+    GroundStation,
+)
 
 
 @dataclass
@@ -24,8 +32,11 @@ class EnvConfig:
     adjacent_plane_delta: int = 1
     bandwidth_mhz: float = 25.0
 
-    num_flows: int = 4
-    flow_rate_bps: float = 1.6e6
+    # traffic model (Poisson arrivals from ground stations)
+    pareto_shape: float = 1.5
+    pareto_scale_bytes: float = 5 * 1024 * 1024
+    mean_flows_per_min: float = 100.0
+
     packet_size_bytes: int = 1500
     queue_cap_pkts: int = 640
     retransmissions: int = 3
@@ -64,6 +75,11 @@ class MultiSatEnv:
         self.step_idx: int = 0
         self.G_phys: nx.DiGraph = nx.DiGraph()
         self.flows: List[Flow] = []
+        self.traffic = GroundStationPoissonTraffic(
+            pareto_shape=cfg.pareto_shape,
+            pareto_scale_bytes=cfg.pareto_scale_bytes,
+            mean_flows_per_min=cfg.mean_flows_per_min,
+        )
 
     # ------------------------------------------------------------------
     def _graph_to_nx(self, G) -> nx.DiGraph:
@@ -93,34 +109,48 @@ class MultiSatEnv:
         return H
 
     # ------------------------------------------------------------------
-    def _random_flows(self) -> List[Flow]:
-        flows: List[Flow] = []
-        nodes = list(self.G_phys.nodes)
-        for fid in range(self.cfg.num_flows):
-            src, dst = random.sample(nodes, 2)
-            flows.append(Flow(id=fid, src=src, dst=dst, rate_bps=self.cfg.flow_rate_bps, path_edges=[]))
-        return flows
-
-    # ------------------------------------------------------------------
     def reset(self, seed: Optional[int] = None):
         if seed is not None:
             random.seed(seed)
         self.step_idx = 0
         G0 = self.builder.build_G_t(0)
         self.G_phys = self._graph_to_nx(G0)
-        self.flows = self._random_flows()
+        self.traffic.reset()
+        self.flows = []
         return self.G_phys
 
     # ------------------------------------------------------------------
-    def _derive_paths(self, actions: Dict[int, Optional[int]]) -> Tuple[List[Flow], float]:
-        """Update each flow's path according to ``actions``.
+    def _geodetic_to_ecef(self, lat_deg: float, lon_deg: float, Re_km: float = 6378.137):
+        lat = math.radians(lat_deg)
+        lon = math.radians(lon_deg)
+        x = Re_km * math.cos(lat) * math.cos(lon)
+        y = Re_km * math.cos(lat) * math.sin(lon)
+        z = Re_km * math.sin(lat)
+        return x, y, z
 
-        Returns the fraction of flows that failed to reach their destination
-        which serves as a loop penalty.
-        """
+    def _associate_ground_stations(self) -> Dict[int, int]:
+        mapping: Dict[int, int] = {}
+        for gs in GROUND_STATIONS:
+            gs_vec = self._geodetic_to_ecef(gs.lat_deg, gs.lon_deg)
+            best, best_dist = None, 1e12
+            for sid, data in self.G_phys.nodes(data=True):
+                pos = data.get("pos", (0.0, 0.0, 0.0))
+                rel = (pos[0] - gs_vec[0], pos[1] - gs_vec[1], pos[2] - gs_vec[2])
+                dot_val = gs_vec[0] * rel[0] + gs_vec[1] * rel[1] + gs_vec[2] * rel[2]
+                if dot_val <= 0:
+                    continue
+                dist = math.sqrt(rel[0] ** 2 + rel[1] ** 2 + rel[2] ** 2)
+                if dist < best_dist:
+                    best, best_dist = sid, dist
+            if best is not None:
+                mapping[gs.id] = best
+        return mapping
+
+    def _derive_paths(self, flows: List[Flow], actions: Dict[int, Optional[int]]) -> Tuple[List[Flow], float]:
+        """Update each flow's path according to ``actions``."""
 
         loops = 0
-        for f in self.flows:
+        for f in flows:
             path: List[Tuple[int, int]] = []
             cur = f.src
             visited = {cur}
@@ -140,22 +170,31 @@ class MultiSatEnv:
             if not success:
                 loops += 1
             f.path_edges = path
-        loop_penalty = loops / max(1, len(self.flows))
-        return self.flows, loop_penalty
+        loop_penalty = loops / max(1, len(flows))
+        return flows, loop_penalty
 
     # ------------------------------------------------------------------
     def step(self, action_dict: Dict[int, Optional[int]]):
-        flows, loop_penalty = self._derive_paths(action_dict)
+        gs_map = self._associate_ground_stations()
+        gs_flows = self.traffic.step(float(self.cfg.step_seconds))
+        flows: List[Flow] = []
+        for f in gs_flows:
+            src_sat = gs_map.get(f.src)
+            dst_sat = gs_map.get(f.dst)
+            if src_sat is None or dst_sat is None:
+                continue
+            flows.append(Flow(id=f.id, src=src_sat, dst=dst_sat, rate_bps=f.rate_bps, path_edges=[]))
+        self.flows, loop_penalty = self._derive_paths(flows, action_dict)
         # Update traffic metrics on current graph
         results = update_loss_and_queue(
             self.G_phys,
-            flows,
+            self.flows,
             dt_s=float(self.cfg.step_seconds),
             S_bytes=self.cfg.packet_size_bytes,
             K_pkts=self.cfg.queue_cap_pkts,
             Nmax=self.cfg.retransmissions,
         )
-        metrics = aggregate_metrics(flows, results)
+        metrics = aggregate_metrics(self.flows, results)
         overflow = sum(self.G_phys[u][v].get("D_pkts", 0.0) for u, v in self.G_phys.edges)
 
         reward = (
