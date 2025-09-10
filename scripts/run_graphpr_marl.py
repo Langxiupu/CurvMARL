@@ -33,12 +33,9 @@ def main():
     algo.ob_builder = ObservationBuilder(L=2)
     d_x, d_e = 6, 6
     algo.actor_backbone = GATBackbone(d_x=d_x, d_e=d_e, L=2)
-    d_in = algo.actor_backbone.layers[-1].W.out_features // algo.actor_backbone.layers[-1].heads
-    algo.policy_head = PolicyHead(d_in=d_in, d_e=d_e)
-    algo.critic = CentralisedCritic(
-        d_emb=algo.actor_backbone.layers[-1].W.out_features * algo.actor_backbone.layers[-1].heads,
-        n_agents=n_agents,
-    )
+    emb_dim = algo.actor_backbone.layers[-1].W.out_features
+    algo.policy_head = PolicyHead(d_in=emb_dim, d_e=d_e)
+    algo.critic = CentralisedCritic(d_emb=emb_dim, n_agents=n_agents)
     algo.opt_actor = torch.optim.Adam(algo.actor_backbone.parameters(), lr=cfg.lr_actor)
     algo.opt_critic = torch.optim.Adam(algo.critic.parameters(), lr=cfg.lr_critic)
 
