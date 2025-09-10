@@ -38,9 +38,12 @@ def main():
     if rew_cfg.get("mode") != "none" and CurvRewirer is not None:
         rewirer = CurvRewirer(**{k: v for k, v in rew_cfg.items() if k != "mode"})
 
-    for _ in range(args.updates):
+    for upd in range(args.updates):
         buf, _ = algo.rollout(args.rollout, rewirer=rewirer)
-        algo.update(buf)
+        pol_loss, val_loss = algo.update(buf)
+        print(
+            f"Update {upd + 1}/{args.updates}: policy loss={pol_loss:.4f} value loss={val_loss:.4f}"
+        )
     print("training completed")
 
 
