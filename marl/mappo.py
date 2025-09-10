@@ -359,6 +359,8 @@ class MAPPO:
         pol_loss_total = 0.0
         val_loss_total = 0.0
         count = 0
+        self.opt_actor.zero_grad()
+        self.opt_critic.zero_grad()
         for epoch in range(self.cfg.epochs):
             idx = torch.randperm(T * N)
             for start in range(0, T * N, self.cfg.minibatch):
@@ -373,24 +375,31 @@ class MAPPO:
                 value_loss = nn.functional.mse_loss(mb_vals, mb_ret.detach())
                 loss = actor_loss + self.cfg.vf_coef * value_loss
 
-                self.opt_actor.zero_grad()
-                self.opt_critic.zero_grad()
-                # ``logp`` entries stored in the rollout buffer still retain
-                # their computation graph from the sampling phase.  During PPO
-                # updates we iterate over the same stored tensors multiple
-                # times, which would normally free the graph after the first
-                # backward call and raise ``RuntimeError: Trying to backward
-                # through the graph a second time`` on subsequent iterations.
-                # Retaining the graph allows multiple backward passes over the
-                # same rollout data without reconstructing it every epoch.
-                loss.backward(retain_graph=True)
-                nn.utils.clip_grad_norm_(self.actor_backbone.parameters(), 0.5)
-                self.opt_actor.step()
-                self.opt_critic.step()
+                # Accumulate gradients across mini-batches before updating the
+                # networks.  The stored log-probabilities and value estimates
+                # keep their computation graphs from the rollout phase so the
+                # graph must be retained until all backward passes have
+                # completed.  Updating the optimisers in the inner loop would
+                # modify parameters in-place while the graph still references
+                # the old versions, triggering ``RuntimeError: one of the
+                # variables needed for gradient computation has been modified by
+                # an inplace operation``.  Instead, defer the optimisation step
+                # until after all mini-batches have contributed to the gradient.
+                retain = not (
+                    epoch == self.cfg.epochs - 1
+                    and end >= T * N
+                )
+                loss.backward(retain_graph=retain)
 
                 pol_loss_total += actor_loss.item()
                 val_loss_total += value_loss.item()
                 count += 1
+
+        nn.utils.clip_grad_norm_(self.actor_backbone.parameters(), 0.5)
+        self.opt_actor.step()
+        self.opt_critic.step()
+        self.opt_actor.zero_grad()
+        self.opt_critic.zero_grad()
         avg_pol = pol_loss_total / count if count else 0.0
         avg_val = val_loss_total / count if count else 0.0
         return avg_pol, avg_val
