@@ -268,29 +268,30 @@ class MAPPO:
         corresponding log-probabilities.
         """
 
+        # Prepare containers sized to the full set of agents.  This ensures
+        # tensors stored in the rollout buffer have consistent dimensions
+        # across timesteps even if only a subset of agents are active.
         actions: Dict[int, int] = {}
-        action_idx: List[torch.Tensor] = []
-        logps: List[torch.Tensor] = []
+        a_idx_tensor = torch.zeros(self.n_agents, dtype=torch.long)
+        logp_tensor = torch.zeros(self.n_agents, dtype=torch.float32)
+
         center_idx = [idx_map[i] for i in act_neighbors.keys()]
         nbrs = [[idx_map[j] for j in act_neighbors[i]] for i in act_neighbors.keys()]
         logits_list = self.policy_head(emb, center_idx, nbrs, edge_feats)
+
         for i, logits, nbr in zip(act_neighbors.keys(), logits_list, nbrs):
+            agent_pos = idx_map[i]
             if logits.numel() == 0:
+                # Agent has no valid moves; default to self-loop with zero log-prob
                 actions[i] = i
-                action_idx.append(torch.tensor(0))
-                logps.append(torch.tensor(0.0))
                 continue
+
             dist = Categorical(logits=logits)
             a = dist.sample()
             actions[i] = act_neighbors[i][a.item()]
-            action_idx.append(a)
-            logps.append(dist.log_prob(a))
-        if action_idx:
-            a_idx_tensor = torch.stack(action_idx).long()
-            logp_tensor = torch.stack(logps)
-        else:  # no active agents
-            a_idx_tensor = torch.zeros(0, dtype=torch.long)
-            logp_tensor = torch.zeros(0)
+            a_idx_tensor[agent_pos] = a
+            logp_tensor[agent_pos] = dist.log_prob(a)
+
         return actions, a_idx_tensor, logp_tensor
 
     # ------------------------------------------------------------------
