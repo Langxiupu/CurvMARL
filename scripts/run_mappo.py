@@ -39,7 +39,7 @@ def main():
         rewirer = CurvRewirer(**{k: v for k, v in rew_cfg.items() if k != "mode"})
 
     for _ in range(args.updates):
-        buf = algo.rollout(args.rollout, rewirer=rewirer)
+        buf, _ = algo.rollout(args.rollout, rewirer=rewirer)
         algo.update(buf)
     print("training completed")
 
